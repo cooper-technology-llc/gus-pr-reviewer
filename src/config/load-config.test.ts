@@ -47,7 +47,7 @@ describe("portable configuration", () => {
 
   it("entirely replaces the personality instead of appending hidden style instructions", async () => {
     const config = parseConfig({
-      personality: { style: "spicy" },
+      personality: { style: "snarky" },
       prompts: {
         personality: { mode: "replace", text: "Speak like a quiet librarian." },
       },

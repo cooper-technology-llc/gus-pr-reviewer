@@ -104,7 +104,7 @@ export const configSchema = z.strictObject({
   personality: z
     .strictObject({
       enabled: z.boolean().default(true),
-      style: z.enum(["warm", "dry", "spicy"]).default("dry"),
+      style: z.enum(["warm", "dry", "snarky"]).default("dry"),
       maxChars: positiveLimit.max(1600).default(600),
     })
     .prefault({}),

@@ -146,8 +146,11 @@ finding or change a verdict. Choose a voice:
 }
 ```
 
-`warm`, `dry`, and `spicy` are supported. Set `enabled` to `false` for a strictly
-technical review, or replace the personality prompt with your own character.
+`warm`, `dry`, and `snarky` are supported. Every bundled style keeps humor
+professional and about the code. `snarky` adds wry, mildly sarcastic teasing of
+demonstrated code problems, never the author. Set `enabled` to `false` for a
+strictly technical review, or replace the personality prompt with your own
+character.
 
 ## Your prompts, completely
 
