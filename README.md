@@ -10,7 +10,7 @@ He reviews GitHub pull requests or committed local branches, keeps findings tied
 to the revisions he inspected, and separates branch maintenance advice from code
 defects. Every review prompt can be extended or completely replaced.
 
-Version **0.1.1** includes the CLI and a runtime you can commit to your repository.
+Version **0.1.2** includes the CLI and a runtime you can commit to your repository.
 The earlier `0.0.1-alpha.0` package contains prompts only.
 
 ## Quick start
@@ -18,7 +18,7 @@ The earlier `0.0.1-alpha.0` package contains prompts only.
 Run once from the repository where you want Gus:
 
 ```sh
-npx --yes gus-pr-reviewer@0.1.1 init
+npx --yes gus-pr-reviewer@0.1.2 init
 ```
 
 Setup walks you through the model provider, model, API-key environment variable,
@@ -66,7 +66,7 @@ outside their scope.
 For local CLI use, you can also install a pinned version:
 
 ```sh
-npm install --save-dev --save-exact gus-pr-reviewer@0.1.1
+npm install --save-dev --save-exact gus-pr-reviewer@0.1.2
 npx gus --help
 ```
 
