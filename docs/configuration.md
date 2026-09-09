@@ -56,16 +56,16 @@ gateway or a library-level model client.
 
 ## Models and credentials
 
-| Setting                     | Default                        | Meaning                                  |
-| --------------------------- | ------------------------------ | ---------------------------------------- |
-| `provider.baseUrl`          | `https://openrouter.ai/api/v1` | Compatible API base.                     |
-| `provider.apiKeyEnv`        | `OPENROUTER_API_KEY`           | Variable containing the key.             |
-| `provider.model`            | `openai/gpt-5.6-luna`          | Default model identifier.                |
-| `provider.stages`           | `{}`                           | Model/reasoning overrides per stage.     |
-| `provider.requestTimeoutMs` | `90000`                        | Per-request timeout.                     |
-| `provider.retries`          | `2`                            | Bounded transient-request retries.       |
-| `provider.jsonMode`         | `true`                         | Request structured JSON where supported. |
-| `provider.reasoningFormat`  | `openrouter`                   | `openrouter`, `openai`, or `none`.       |
+| Setting                     | Default                        | Meaning                                                                                    |
+| --------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------ |
+| `provider.baseUrl`          | `https://openrouter.ai/api/v1` | Compatible API base.                                                                       |
+| `provider.apiKeyEnv`        | `OPENROUTER_API_KEY`           | Variable containing the key.                                                               |
+| `provider.model`            | `openai/gpt-5.6-luna`          | Default model identifier.                                                                  |
+| `provider.stages`           | `{}`                           | Model/reasoning overrides per stage.                                                       |
+| `provider.requestTimeoutMs` | `90000`                        | Per-request timeout.                                                                       |
+| `provider.retries`          | `2`                            | Bounded transient-request retries.                                                         |
+| `provider.jsonMode`         | `true`                         | Request JSON mode for triage only. Review assessments and personality always use text DSL. |
+| `provider.reasoningFormat`  | `openrouter`                   | `openrouter`, `openai`, or `none`.                                                         |
 
 `GUS_MODEL` overrides the default model; explicit stage models remain selected.
 `GUS_PROVIDER_URL` overrides the provider URL. Configuration stores names of
@@ -106,6 +106,12 @@ or `file` per override:
 removes the bundled style instruction. Runtime schemas, tool permissions,
 evidence validation, and budgets remain in force. Custom prompts should ask the
 model to obey the supplied output contract.
+
+Investigation, validation, and report responses use `REVIEW v1`; personality
+uses `PERSONALITY v1`. Gus parses the text locally and applies its stage schemas
+and evidence checks before rendering comments. Triage retains its small JSON
+response. The [DSL protocol](review-behavior.md#dsl-responses) describes the
+records and escaping rules for custom prompts and model clients.
 
 ```sh
 gus prompts

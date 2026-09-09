@@ -42,7 +42,12 @@ export const configSchema = z.strictObject({
       model: z.string().min(1).default("openai/gpt-5.6-luna"),
       requestTimeoutMs: positiveLimit.max(300000).default(90000),
       retries: z.number().int().min(0).max(5).default(2),
-      jsonMode: z.boolean().default(true),
+      jsonMode: z
+        .boolean()
+        .default(true)
+        .describe(
+          "Enable provider JSON mode for triage only. Review assessments and personality use text DSL with local validation.",
+        ),
       reasoningFormat: z
         .enum(["openrouter", "openai", "none"])
         .default("openrouter"),

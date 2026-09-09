@@ -10,15 +10,19 @@ He reviews GitHub pull requests or committed local branches, keeps findings tied
 to the revisions he inspected, and separates branch maintenance advice from code
 defects. Every review prompt can be extended or completely replaced.
 
-Version **0.1.2** includes the CLI and a runtime you can commit to your repository.
+Version **0.1.3** includes the CLI and a runtime you can commit to your repository.
 The earlier `0.0.1-alpha.0` package contains prompts only.
+
+Review assessments use a compact text DSL that Gus parses and validates locally
+before rendering GitHub comments. Finding submissions and personality responses
+do not use provider JSON mode. See the [response protocol](docs/review-behavior.md#dsl-responses).
 
 ## Quick start
 
 Run once from the repository where you want Gus:
 
 ```sh
-npx --yes gus-pr-reviewer@0.1.2 init
+npx --yes gus-pr-reviewer@0.1.3 init
 ```
 
 Setup walks you through the model provider, model, API-key environment variable,
@@ -66,7 +70,7 @@ outside their scope.
 For local CLI use, you can also install a pinned version:
 
 ```sh
-npm install --save-dev --save-exact gus-pr-reviewer@0.1.2
+npm install --save-dev --save-exact gus-pr-reviewer@0.1.3
 npx gus --help
 ```
 

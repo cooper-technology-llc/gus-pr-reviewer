@@ -41,7 +41,11 @@
           "minimum": 0,
           "maximum": 5
         },
-        "jsonMode": { "default": true, "type": "boolean" },
+        "jsonMode": {
+          "default": true,
+          "description": "Enable provider JSON mode for triage only. Review assessments and personality use text DSL with local validation.",
+          "type": "boolean"
+        },
         "reasoningFormat": {
           "default": "openrouter",
           "type": "string",
