@@ -219,5 +219,6 @@ export interface ReviewResult {
   evidence: ReviewEvidence[];
   checks: CheckResult[];
   limitations: string[];
+  diagnostics?: string[];
   usage: ReviewUsage;
 }

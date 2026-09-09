@@ -145,11 +145,14 @@ export async function reviewChange(input: ReviewInput): Promise<ReviewResult> {
   }
   result.evidence = [...state.evidence.values()];
   result.limitations = [
-    ...new Set([...result.limitations, ...state.limitations, ...state.notices]),
+    ...new Set([...result.limitations, ...state.limitations]),
   ];
   if (input.config.personality.enabled && result.verdict !== "incomplete") {
     await addPersonality(result, input, budget, state);
   }
+  result.diagnostics = [
+    ...new Set([...(result.diagnostics ?? []), ...state.notices]),
+  ];
   result.usage = budget.usage();
   return result;
 }
@@ -178,7 +181,8 @@ function initialReview(
     coverage: buildCoverage(input.repository.files, [], new Set()),
     evidence: [],
     checks: input.checks,
-    limitations: [...input.repository.omissions],
+    limitations: [],
+    diagnostics: [...input.repository.omissions],
     usage: budget.usage(),
   };
 }
@@ -201,7 +205,7 @@ function applyValidatedAssessment(
     state.inspectedPaths,
   );
   const limitations = assessmentLimitations(result, input, state);
-  result.limitations.push(...limitations, ...state.notices);
+  result.limitations.push(...limitations);
   const failedChecks = input.checks.some(
     (check) =>
       check.headSha === input.repository.snapshot.headSha &&
@@ -274,7 +278,9 @@ function frozenReviewFacts(result: ReviewResult) {
     checks: result.checks,
     coverage: result.coverage,
     limitations: result.limitations,
-    branchAdvice: result.snapshot.advisories,
+    branchAdvice: result.snapshot.advisories.filter(
+      (advisory) => advisory.action !== "none",
+    ),
   };
 }
 
@@ -304,7 +310,7 @@ async function addPersonality(
     });
     result.personality = copy.text;
   } catch {
-    result.limitations.push(
+    state.notices.push(
       "Optional reviewer voice was omitted because it was unavailable or failed its output contract.",
     );
   }
