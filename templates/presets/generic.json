@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "Gus",
+  "provider": {
+    "model": "openai/gpt-5.6-luna"
+  },
+  "personality": {
+    "enabled": true,
+    "style": "dry"
+  },
+  "contextFiles": [],
+  "issues": {
+    "mode": "off"
+  }
+}

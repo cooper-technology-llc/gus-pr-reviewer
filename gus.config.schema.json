@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "default": 1, "type": "number", "const": 1 },
+    "name": {
+      "default": "Gus",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "provider": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "baseUrl": {
+          "default": "https://openrouter.ai/api/v1",
+          "type": "string",
+          "format": "uri"
+        },
+        "apiKeyEnv": {
+          "default": "OPENROUTER_API_KEY",
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "model": {
+          "default": "openai/gpt-5.6-luna",
+          "type": "string",
+          "minLength": 1
+        },
+        "requestTimeoutMs": {
+          "default": 90000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 300000
+        },
+        "retries": {
+          "default": 2,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "jsonMode": { "default": true, "type": "boolean" },
+        "reasoningFormat": {
+          "default": "openrouter",
+          "type": "string",
+          "enum": ["openrouter", "openai", "none"]
+        },
+        "stages": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "enum": [
+              "triage",
+              "investigate",
+              "validate",
+              "report",
+              "personality"
+            ]
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "model": { "type": "string", "minLength": 1 },
+              "reasoningEffort": {
+                "type": "string",
+                "enum": ["none", "minimal", "low", "medium", "high", "xhigh"]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "review": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "maxTurns": {
+          "default": 20,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        },
+        "maxToolCalls": {
+          "default": 80,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 500
+        },
+        "maxDurationMs": {
+          "default": 600000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 3600000
+        },
+        "maxInputChars": {
+          "default": 220000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 2000000
+        },
+        "maxOutputTokens": {
+          "default": 8192,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 64000
+        },
+        "maxTotalTokens": {
+          "default": 180000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 2000000
+        },
+        "maxCostUsd": {
+          "default": null,
+          "anyOf": [
+            { "type": "number", "exclusiveMinimum": 0 },
+            { "type": "null" }
+          ]
+        },
+        "maxFiles": {
+          "default": 500,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 10000
+        },
+        "maxFileBytes": {
+          "default": 120000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 2000000
+        },
+        "maxDiffCharsPerFile": {
+          "default": 16000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 500000
+        },
+        "maxToolOutputChars": {
+          "default": 32000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 200000
+        },
+        "blockingSeverity": {
+          "default": "major",
+          "type": "string",
+          "enum": ["critical", "major", "minor"]
+        },
+        "scorecard": { "default": true, "type": "boolean" },
+        "exclude": {
+          "default": [
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/vendor/**",
+            "**/package-lock.json",
+            "**/yarn.lock",
+            "**/pnpm-lock.yaml",
+            "**/*.min.js",
+            "**/*.generated.*"
+          ],
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "highRiskPaths": {
+          "default": [
+            "**/migrations/**",
+            "**/auth*/**",
+            "**/*permission*",
+            "**/billing/**",
+            ".github/workflows/**"
+          ],
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "prompts": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "enum": ["triage", "investigate", "validate", "report", "personality"]
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "mode": { "type": "string", "enum": ["extend", "replace"] },
+              "text": { "type": "string", "minLength": 1, "maxLength": 100000 },
+              "file": { "not": {} }
+            },
+            "required": ["mode", "text"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mode": { "type": "string", "enum": ["extend", "replace"] },
+              "file": { "type": "string", "minLength": 1 },
+              "text": { "not": {} }
+            },
+            "required": ["mode", "file"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "contextFiles": {
+      "default": [],
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "rules": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "paths": {
+            "minItems": 1,
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "forbiddenAddedText": { "type": "string", "minLength": 1 },
+          "companionPaths": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "message": { "type": "string", "minLength": 1 },
+          "severity": {
+            "default": "major",
+            "type": "string",
+            "enum": ["critical", "major", "minor"]
+          }
+        },
+        "required": ["id", "paths", "message"],
+        "additionalProperties": false
+      }
+    },
+    "personality": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": { "default": true, "type": "boolean" },
+        "style": {
+          "default": "dry",
+          "type": "string",
+          "enum": ["warm", "dry", "spicy"]
+        },
+        "maxChars": {
+          "default": 600,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 1600
+        }
+      },
+      "additionalProperties": false
+    },
+    "github": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "apiUrl": {
+          "default": "https://api.github.com",
+          "type": "string",
+          "format": "uri"
+        },
+        "tokenEnv": {
+          "default": "GITHUB_TOKEN",
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "reviewerLogins": {
+          "default": ["github-actions[bot]"],
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "allowForks": { "default": false, "type": "boolean" },
+        "maxInlineComments": {
+          "default": 5,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30
+        },
+        "reviewCommand": {
+          "default": "@gus",
+          "type": "string",
+          "minLength": 1
+        },
+        "issuesCommand": {
+          "default": "@gus issues",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "issues": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "mode": {
+          "default": "off",
+          "type": "string",
+          "enum": ["off", "on-request", "merge-clean"]
+        },
+        "maxIssues": {
+          "default": 3,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 20
+        },
+        "labels": {
+          "default": [],
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "slack": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": { "default": false, "type": "boolean" },
+        "webhookEnv": {
+          "default": "SLACK_WEBHOOK_URL",
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

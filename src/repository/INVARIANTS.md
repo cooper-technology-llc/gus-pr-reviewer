@@ -1,0 +1,6 @@
+# Repository inspection invariants
+
+- INV-REPOSITORY-1: Every source read resolves to the session's immutable head, actual target, contribution baseline, or prospective integration tree — enforced by `repository-reads.ts#revisionSha` and `repository-session.ts#freezeSnapshot`.
+- INV-REPOSITORY-2: Complete inspection requires all delivered line ranges for one immutable source or diff; partial pages, search matches, and another revision cannot fill gaps — enforced by `logic/inspection-coverage.ts#createInspectionCoverage` and `repository-tools.ts#recordSourceCoverage`.
+- INV-REPOSITORY-3: Review reads cannot follow symbolic links, expose credential paths, run repository hooks or configuration, or mutate the author's checkout — enforced by `repository-paths.ts#assertReadablePath`, `repository-reads.ts#createRepositoryReader`, `local-object-import.ts#importLocalObjects`, and `git-command.ts#createGitStore`.
+- INV-REPOSITORY-4: A tool response exceeding its complete serialized output budget supplies no source evidence or completed inspection claim — enforced by `repository-evidence.ts#toolResult`.

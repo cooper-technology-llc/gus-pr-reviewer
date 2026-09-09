@@ -1,0 +1,71 @@
+{
+  "name": "gus-pr-reviewer",
+  "version": "0.1.1",
+  "description": "Gus, your configurable AI pull-request review teammate.",
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "brytoncoopertech",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cooper-technology-llc/gus-pr-reviewer.git"
+  },
+  "homepage": "https://github.com/cooper-technology-llc/gus-pr-reviewer#readme",
+  "bugs": {
+    "url": "https://github.com/cooper-technology-llc/gus-pr-reviewer/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "bin": {
+    "gus": "dist/cli.js",
+    "gus-pr-reviewer": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./prompts": "./prompts.json",
+    "./config-schema": "./gus.config.schema.json"
+  },
+  "files": [
+    "dist",
+    "runtime",
+    "LICENSE",
+    "prompts.json",
+    "gus.config.schema.json",
+    "templates",
+    "docs"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/export-config-schema.mjs && node scripts/build-runtime.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "format:check": "prettier --check src tests templates docs scripts README.md package.json tsconfig.json tsconfig.build.json vitest.config.mts prompts.json gus.config.schema.json",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "minimatch": "^10.2.6",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "esbuild": "0.28.2",
+    "prettier": "^3.9.6",
+    "typescript": "~5.9.3",
+    "vitest": "~4.1.7"
+  },
+  "keywords": [
+    "ai",
+    "code-review",
+    "pull-request",
+    "prompts"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public",
+    "tag": "latest"
+  }
+}
