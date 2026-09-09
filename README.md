@@ -10,7 +10,7 @@ He reviews GitHub pull requests or committed local branches, keeps findings tied
 to the revisions he inspected, and separates branch maintenance advice from code
 defects. Every review prompt can be extended or completely replaced.
 
-Version **0.1.3** includes the CLI and a runtime you can commit to your repository.
+Version **0.1.4** includes the CLI and a runtime you can commit to your repository.
 The earlier `0.0.1-alpha.0` package contains prompts only.
 
 Review assessments use a compact text DSL that Gus parses and validates locally
@@ -22,18 +22,20 @@ do not use provider JSON mode. See the [response protocol](docs/review-behavior.
 Run once from the repository where you want Gus:
 
 ```sh
-npx --yes gus-pr-reviewer@0.1.3 init
+npx --yes gus-pr-reviewer@0.1.4 init
 ```
 
 Setup walks you through the model provider, model, API-key environment variable,
-personality, review budget, and repository guidance files. It suggests ordinary
-guidance files only when they exist. Add the provider secret selected during
-setup and commit `gus.config.json`, `.github/gus`, and the generated workflow.
+personality, review budget, and repository guidance files. Selected guidance is
+sent in full on repeated review turns, so prefer a concise review policy and
+read larger references as needed. Add the provider secret selected during setup
+and commit `gus.config.json`, `.github/gus`, and the generated workflow.
 GitHub runs the committed copy without installing Gus from npm.
 
 Use `gus init --yes` to accept defaults without questions. Noninteractive runs
-also use defaults. All settings remain editable in `gus.config.json`, and every
-review prompt can be replaced.
+also use defaults, with no repository guidance preloaded automatically. All
+settings remain editable in `gus.config.json`, and every review prompt can be
+replaced.
 
 ## Start from this checkout
 
@@ -70,7 +72,7 @@ outside their scope.
 For local CLI use, you can also install a pinned version:
 
 ```sh
-npm install --save-dev --save-exact gus-pr-reviewer@0.1.3
+npm install --save-dev --save-exact gus-pr-reviewer@0.1.4
 npx gus --help
 ```
 

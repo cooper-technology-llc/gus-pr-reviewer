@@ -88,9 +88,15 @@ describe("local review application", () => {
         );
         if (!userMessage) throw new Error("Expected the investigation input.");
         const input = z
-          .object({ reviewInput: seedSchema })
+          .object({
+            format: z.literal("gus-context-v1"),
+            sourceTexts: z.array(
+              z.object({ id: z.string(), text: z.string() }),
+            ),
+            payload: z.object({ reviewInput: seedSchema }),
+          })
           .parse(JSON.parse(userMessage.content));
-        assessment = assessFixture(input.reviewInput);
+        assessment = assessFixture(input.payload.reviewInput);
         output = assessment;
       } else if (step === 3 && assessment)
         output = { ...assessment, candidateResolutions: [] };

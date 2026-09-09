@@ -4,6 +4,28 @@ Gus builds a pinned Git snapshot, maps changed behavior, investigates with
 bounded read-only tools, validates candidate findings, and produces a report.
 The personality stage receives finalized technical facts afterward.
 
+## Focused investigation and source reuse
+
+Each stage starts with the evidence relevant to its job. Investigation follows
+specific questions about the contribution; validation checks its candidates
+against the collected evidence and reads more when a gap or contradiction
+requires it. Documentation describing future verification steps does not claim
+those steps have already run. Missing execution results remain visible without
+automatically becoming an unanswered source-review question.
+
+The model receives source through a `gus-context-v1` envelope. `payload` holds
+the stage or tool result; `sourceTexts` defines each distinct source string by
+an ID, and `{ "textRef": "..." }` refers to that definition. A stage receives
+every definition it needs. Repeated tool results can reuse definitions already
+present in that stage's conversation.
+
+Reusing text does not merge evidence identities. Every evidence record retains
+its path, revision, SHA, coordinates, and truncation state, and the host keeps
+the full original text for local validation. Equal text at two revisions still
+requires the corresponding inspection evidence. Exact successful reads may be
+reused within the immutable review session; failed reads are not treated as
+successful cached evidence.
+
 ## DSL responses
 
 Gus asks the model to write a compact, line-oriented text protocol for review
@@ -150,6 +172,21 @@ Turns, tool calls, context, duration, tokens, and optional observed cost have
 explicit limits. Provider failure, exhausted investigation, missing accounting,
 or incomplete coverage can prevent a ready result. Fallbacks describe failures
 instead of handing out confident grades.
+
+## Usage reporting
+
+The JSON review artifact includes `usage.calls`: one record for each admitted
+model turn, with its stage, trigger, model, input character breakdown,
+provider-reported tokens and cost, request attempts, tool names, and elapsed
+time. Failed requests and unavailable accounting remain explicit. Character
+counts describe input size; they are not token estimates or billable usage.
+
+These records contain no prompts, source text, tool arguments, or credential
+values. The Markdown review includes a collapsed summary by stage. The existing
+aggregate usage fields remain available, and older artifacts without call
+records remain supported. Provider retries can make request-attempt counts
+larger than the number of model turns. This release does not collect separate
+cached-token or reasoning-token counts.
 
 ## Known boundaries
 

@@ -42,7 +42,7 @@ explicit trusted file to try configuration changes locally before merging them.
     "maxCostUsd": 2,
     "blockingSeverity": "major"
   },
-  "contextFiles": ["README.md", "CONTRIBUTING.md"],
+  "contextFiles": [],
   "personality": { "enabled": true, "style": "dry" },
   "github": { "allowForks": false, "maxInlineComments": 5 },
   "issues": { "mode": "on-request", "maxIssues": 3 },
@@ -53,6 +53,24 @@ explicit trusted file to try configuration changes locally before merging them.
 The model and reasoning values must be supported by the provider. Gus uses
 chat-completions-style requests; different semantics require a compatible
 gateway or a library-level model client.
+
+## Keep repository context focused
+
+`contextFiles` is an explicit list of policy files loaded in full from the
+trusted configuration revision. Their text is included in triage,
+investigation, and validation, including subsequent tool turns. A large file
+there can dominate input usage even for a small change.
+
+Start with a concise review policy covering the rules that apply to every PR.
+It can name larger reference documents and the circumstances in which their
+relevant sections should be read from the pinned base revision. Keep current
+source inspection separate from those trusted review criteria. Explicitly
+selected files are never silently shortened or discarded.
+
+Fresh noninteractive initialization leaves `contextFiles` empty. Interactive
+setup suggests discovered guidance, explains its repeated context cost, and
+retains the paths you explicitly select. Existing installed configurations are
+preserved by runtime updates.
 
 ## Models and credentials
 
@@ -173,11 +191,11 @@ vendor code, lockfiles, minified files, and `*.generated.*`.
 paths, billing, and workflows. Replacing either array replaces its defaults.
 Excluded and truncated files remain visible in coverage.
 
-`contextFiles` defaults to an empty list. Setup suggests existing `README.md`,
-`CONTRIBUTING.md`, and `AGENTS.md` files and lets you choose other guidance or no
-guidance. The example paths above are optional. Nested policies can
-be investigated through bounded reads. Keep selected policy focused enough to
-fit within context limits.
+`contextFiles` defaults to an empty list. Interactive setup suggests existing
+`README.md`, `CONTRIBUTING.md`, and `AGENTS.md` files and lets you choose other
+guidance or none. Larger and nested references remain available through bounded
+reads. See [focused repository context](#keep-repository-context-focused) before
+adding complete reference documents to every model turn.
 
 ## Deterministic repository rules
 

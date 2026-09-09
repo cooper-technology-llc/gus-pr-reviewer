@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ReviewStage } from "../config/config-schema.js";
 
 export const revisionSchema = z.enum(["head", "base", "parent", "integration"]);
 export type Revision = z.infer<typeof revisionSchema>;
@@ -166,6 +167,29 @@ export interface ReviewCoverage {
   reason: string;
 }
 
+export interface ReviewModelCallContext {
+  stage: ReviewStage;
+  model: string;
+  trigger: "initial" | "tool-results" | "correction";
+  policyChars: number;
+}
+
+export interface ReviewModelCallUsage extends ReviewModelCallContext {
+  turn: number;
+  inputChars: number;
+  systemChars: number;
+  seedChars: number;
+  toolResultChars: number;
+  toolDefinitionChars: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  attempts: number;
+  elapsedMs: number;
+  status: "completed" | "failed";
+  toolNames: string[];
+}
+
 export interface ReviewUsage {
   inputTokens: number;
   outputTokens: number;
@@ -175,6 +199,7 @@ export interface ReviewUsage {
   elapsedMs: number;
   models: string[];
   usageComplete?: boolean;
+  calls?: ReviewModelCallUsage[];
 }
 
 export interface ReviewResult {
