@@ -163,6 +163,20 @@ The report identifies inspected, excluded, unreviewed, and partial files.
 Truncation and missing context remain visible. Size, risk, scorecards, and
 verdict are distinct from executed test results.
 
+The JSON artifact retains informational omissions, successful tool warnings,
+and optional voice failures in `review.diagnostics`. These notices do not fill
+the comment's Limitations section or the summary and personality prompts.
+Material assessment failures remain in `review.limitations` and in the comment;
+incomplete coverage still prevents a ready verdict. Existing review objects
+without diagnostics continue to display their supplied limitations.
+
+Comments include branch advice only when an action is needed; the snapshot
+retains all history notices. A completed review with no findings omits the empty
+Findings section. When neither architecture nor tests received a grade, size
+and risk appear on one line instead of an empty scorecard. The summary focuses
+on changed behavior and validated consequences; the host reports check results
+and coverage separately.
+
 Gus does not run project code, tests, builds, or deployments. Supply observations
 through `--checks`, tied to the head SHA. A caller-supplied pass is not an
 independently authenticated CI result. Static inspection, synthetic integration,

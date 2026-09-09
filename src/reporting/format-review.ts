@@ -33,7 +33,11 @@ export function formatReviewMarkdown(
     "",
   ];
 
-  if (review.verdict !== "incomplete" && config.review.scorecard) {
+  if (
+    review.verdict !== "incomplete" &&
+    config.review.scorecard &&
+    (review.architecture || review.tests)
+  ) {
     sections.push(
       "### Scorecard",
       "",
@@ -49,6 +53,8 @@ export function formatReviewMarkdown(
       );
     if (review.tests)
       sections.push(`Tests: ${escapeMarkdown(review.tests.reason)}`, "");
+  } else if (review.verdict !== "incomplete" && config.review.scorecard) {
+    sections.push(`Size: **${review.size}** · Risk: **${review.risk}**.`, "");
   }
   if (review.verdict === "incomplete")
     sections.push(
@@ -56,12 +62,11 @@ export function formatReviewMarkdown(
       "",
     );
 
-  sections.push("### Findings", "");
-  if (review.findings.length === 0)
+  if (review.findings.length > 0 || review.verdict === "incomplete")
+    sections.push("### Findings", "");
+  if (review.findings.length === 0 && review.verdict === "incomplete")
     sections.push(
-      review.verdict === "incomplete"
-        ? "No validated findings are available from this incomplete review."
-        : "No findings.",
+      "No validated findings are available from this incomplete review.",
       "",
     );
   for (const finding of review.findings)
@@ -75,9 +80,12 @@ export function formatReviewMarkdown(
       );
     sections.push("");
   }
-  if (review.snapshot.advisories.length > 0) {
+  const actionableAdvice = review.snapshot.advisories.filter(
+    (advisory) => advisory.action !== "none",
+  );
+  if (actionableAdvice.length > 0) {
     sections.push("### Branch advice", "");
-    for (const advisory of review.snapshot.advisories)
+    for (const advisory of actionableAdvice)
       sections.push(
         `- ${escapeMarkdown(advisory.message)} ${escapeMarkdown(advisory.evidence)} Action: ${advisory.action}.`,
       );
@@ -93,9 +101,7 @@ export function formatReviewMarkdown(
 
   sections.push("### Verification", "");
   if (review.checks.length === 0)
-    sections.push(
-      "No executed check results were supplied. Source review does not establish passing CI or deployed behavior.",
-    );
+    sections.push("No executed check results were supplied.");
   for (const check of review.checks) {
     const status =
       check.headSha === review.snapshot.headSha

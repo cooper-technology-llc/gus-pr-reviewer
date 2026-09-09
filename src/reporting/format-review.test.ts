@@ -14,6 +14,98 @@ import { formatReviewMarkdown } from "./format-review.js";
 import { parseReviewState, readReportIdentity } from "./review-state.js";
 
 describe("review report", () => {
+  it("omits empty grades and findings while retaining concise verification for a completed review", () => {
+    const review = makeReview();
+    review.architecture = null;
+    review.tests = null;
+    review.diagnostics = ["A search skipped an unrelated binary attachment."];
+    const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
+
+    expect(report).toContain("No blocking findings identified");
+    expect(report).toContain("Widget updates preserve existing values.");
+    expect(report).not.toContain("### Scorecard");
+    expect(report).not.toContain("Not graded");
+    expect(report).not.toContain("### Findings");
+    expect(report).not.toContain("No findings.");
+    expect(report).not.toContain("binary attachment");
+    expect(report).toContain("No executed check results were supplied.");
+    expect(report).not.toContain("Source review does not establish");
+    expect(report).toContain(
+      "1 inspected, 0 partial, 0 excluded, 0 unreviewed",
+    );
+    expect(readReportIdentity(report)).not.toBeNull();
+  });
+
+  it("shows actionable branch advice and retains informational history only in the review data", () => {
+    const review = makeReview();
+    const history = {
+      code: "history-rewritten",
+      message: "History was rewritten.",
+      evidence: "The previous head is not an ancestor.",
+      action: "none" as const,
+    };
+    review.snapshot.advisories = [history];
+    const historyOnly = formatReviewMarkdown(
+      review,
+      makePullRequest(),
+      testConfig,
+    );
+    expect(historyOnly).not.toContain("### Branch advice");
+    expect(historyOnly).not.toContain(history.message);
+    review.snapshot.advisories.push({
+      code: "conflict",
+      message: "Resolve the target conflict.",
+      evidence: "widget.ts conflicts in the prospective integration.",
+      action: "resolve-conflicts",
+    });
+    const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
+    expect(report).toContain("### Branch advice");
+    expect(report).toContain("Resolve the target conflict.");
+    expect(report).toContain("Action: resolve-conflicts");
+    expect(report).not.toContain(history.message);
+    expect(report).not.toContain("Action: none");
+    expect(review.snapshot.advisories).toHaveLength(2);
+  });
+
+  it("preserves legacy material limitations, missing coverage and failed or stale checks", () => {
+    const review = makeReview();
+    review.verdict = "incomplete";
+    review.limitations = ["The current caller could not be inspected."];
+    review.questions = ["Does the deployed caller accept this value?"];
+    review.coverage[0] = {
+      path: "widget.ts",
+      status: "partial",
+      reason: "Only the first page was available.",
+    };
+    review.checks = [
+      {
+        name: "unit",
+        status: "failed",
+        headSha: "head-sha",
+        details: "The widget assertion failed.",
+      },
+      {
+        name: "integration",
+        status: "passed",
+        headSha: "old-head",
+        details: "Only the previous revision ran.",
+      },
+    ];
+    const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
+    expect(review.diagnostics).toBeUndefined();
+    expect(report).toContain("Review incomplete");
+    expect(report).toContain(
+      "No validated findings are available from this incomplete review.",
+    );
+    expect(report).toContain("### Limitations");
+    expect(report).toContain(review.limitations[0]);
+    expect(report).toContain(review.questions[0]);
+    expect(report).toContain("1 partial");
+    expect(report).toContain("Only the first page was available.");
+    expect(report).toContain("unit: failed");
+    expect(report).toContain("integration: inconclusive (different HEAD)");
+  });
+
   it("round-trips hidden state and detects changed report content", () => {
     const review = makeReview();
     const report = formatReviewMarkdown(review, makePullRequest(), testConfig);

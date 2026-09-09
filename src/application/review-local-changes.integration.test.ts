@@ -158,10 +158,11 @@ describe("local review application", () => {
       ),
     ).toBe(true);
     expect(
-      completed.review.limitations.some((notice) =>
+      completed.review.diagnostics?.some((notice) =>
         notice.includes("package-lock.json"),
       ),
     ).toBe(true);
+    expect(completed.review.limitations).toEqual([]);
     expect(completed.publication.status).toBe("dry-run");
     expect(completed.markdown).toContain("Base Gus review");
     expect(completed.review.personality).toContain("shelve without a ladder");
