@@ -4,6 +4,96 @@ Gus builds a pinned Git snapshot, maps changed behavior, investigates with
 bounded read-only tools, validates candidate findings, and produces a report.
 The personality stage receives finalized technical facts afterward.
 
+## DSL responses
+
+Gus asks the model to write a compact, line-oriented text protocol for review
+assessments. It parses those records locally, validates their types and evidence,
+then renders the findings as GitHub comments. Multiline explanations do not need
+JSON quoting or escaped newlines. The provider receives no `response_format`
+constraint for investigation, validation, reporting, or personality.
+
+Triage keeps its small JSON response. Investigation and validation can still use
+native read-only tools while collecting evidence; their final text uses
+`REVIEW v1`. Reporting and personality have no tools. A separate model and
+reasoning setting can be selected for each stage through `provider.stages`.
+
+An assessment looks like this:
+
+```text
+REVIEW v1
+SUMMARY
+The change updates an exported value and its caller contract.
+RISK | low
+ARCHITECTURE | A
+The change stays within its existing module.
+TESTS | B
+The available evidence is static; no test results were supplied.
+FINDING | candidate-1 | major | src/value.ts | 12 | RIGHT | blocking
+TITLE
+Preserve the one-unit contract
+TRIGGER
+A caller requests "one" and reads the exported constant.
+IMPACT
+The caller receives two units.
+FIX
+Preserve the documented one-unit value.
+EVIDENCE | supplied-evidence-id
+COVERAGE | src/value.ts | inspected
+The changed line and its caller were inspected.
+EVIDENCE | supplied-evidence-id
+END
+```
+
+The evidence identifier above is a placeholder: actual output must cite an ID
+supplied by the host. Evidence, current diff coordinates, coverage, prior
+findings, and candidate resolutions are checked after conversion. The DSL
+cannot grant permissions or invent a successful check result.
+
+The assessment records are:
+
+| Record                                                             | Content                                                                      |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `SUMMARY`                                                          | Required multiline summary.                                                  |
+| `RISK \| low/medium/high`                                          | Required risk classification; the host retains its deterministic floor.      |
+| `ARCHITECTURE \| A/B/C/D/F` and `TESTS \| A/B/C/D/F`               | Grade followed by its explanation, or an explicit `none` instead of a grade. |
+| `QUESTION`                                                         | An open question; repeat for additional questions.                           |
+| `FINDING \| id \| severity \| path \| line \| side \| disposition` | A finding with `TITLE`, `TRIGGER`, `IMPACT`, `FIX`, and `EVIDENCE` sections. |
+| `COVERAGE \| path \| inspected/partial/unreviewed`                 | A reason followed by `EVIDENCE`.                                             |
+| `PRIOR \| id \| still-open/resolved/rejected/unverified`           | Current reconciliation reason followed by `EVIDENCE`.                        |
+| `CANDIDATE \| id \| confirmed/rejected/unverified`                 | Validation-stage resolution reason followed by `EVIDENCE`.                   |
+| `EVIDENCE \| id \| another-id`                                     | Evidence IDs for the current finding, coverage, prior, or candidate record.  |
+
+Severity is `critical`, `major`, or `minor`; side is `LEFT` or `RIGHT`;
+disposition is `blocking` or `follow-up`. Findings require a positive integer
+line. Repeating record kinds creates lists; omitting them means an empty list.
+This does not bypass required coverage or reconciliation of supplied candidates
+and prior findings. A bare `EVIDENCE` records missing evidence for coverage or
+reconciliation; a finding must have at least one actual evidence ID. `END` is
+required on its own line.
+
+The report stage accepts only `REVIEW v1`, `SUMMARY`, its prose, and `END`.
+Findings, grades, and the verdict are already frozen. Personality similarly
+uses a separate small response:
+
+```text
+PERSONALITY v1
+TAKE
+That retry loop was committed to the bit.
+END
+```
+
+Outer Markdown fences and CRLF line endings are accepted. Prose retains its
+quotes, backslashes, code fences, and line breaks. Escape a literal pipe in a
+header field as `\|` and a literal backslash there as `\\`. A reserved or
+marker-shaped line in prose needs a leading backslash, such as `\END`. Literal
+`\n` inside a code example remains literal text.
+
+Malformed blocks, unknown markers, duplicate singleton fields, and missing
+`END` produce bounded correction requests. Invalid findings are never silently
+dropped to turn a malformed review into a clean one. Existing plain or fenced
+JSON responses remain a locally validated compatibility fallback; the host
+still requests DSL and does not enable provider JSON mode for these stages.
+
 ## Branch context
 
 Snapshots record target/head SHAs, merge base, comparison base, default branch,
