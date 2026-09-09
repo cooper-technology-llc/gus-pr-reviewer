@@ -26,16 +26,20 @@ export async function setupConfiguration(
   options: SetupConfigurationOptions,
 ): Promise<GusConfigInput> {
   ensureActive(options.signal);
-  const guidance = await discoverGuidance(options.directory);
-  if (options.yes || !options.interactive)
+  if (options.yes || !options.interactive) {
+    options.write(
+      "No repository guidance files are preloaded. Add a concise review-policy file to contextFiles in gus.config.json if needed.\n",
+    );
     return makeConfiguration(
       defaultConfig.provider.baseUrl,
       defaultConfig.provider.model,
       defaultConfig.provider.apiKeyEnv,
       defaultConfig.personality.style,
-      guidance,
+      [],
       defaultConfig.review.maxTotalTokens,
     );
+  }
+  const guidance = await discoverGuidance(options.directory);
   const questions = options.createQuestions();
   try {
     options.write(
@@ -72,6 +76,9 @@ export async function setupConfiguration(
       guidance.length > 0
         ? ` Suggested: ${guidance.join(", ")}.`
         : " No common root guidance files were found.";
+    options.write(
+      "Selected guidance files are loaded in full on repeated model turns. Prefer a concise review-policy file; leave guidance blank to preload none.\n",
+    );
     const contextFiles = await ask(
       `Repository guidance paths, comma-separated; blank means none.${suggested}`,
       (answer) => validateGuidancePaths(options.directory, answer),

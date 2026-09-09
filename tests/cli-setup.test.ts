@@ -143,6 +143,44 @@ describe("guided init", () => {
     expect(captured.scripted.prompts[4]).toContain("Suggested: README.md");
   });
 
+  it("retains explicitly selected large guidance after explaining repeated full-file loading", async () => {
+    const directory = await temporaryDirectory();
+    const readme = "Detailed repository guidance.\n".repeat(3000);
+    const agents = "Detailed agent guidance.\n".repeat(3000);
+    await writeFile(join(directory, "README.md"), readme);
+    await writeFile(join(directory, "AGENTS.md"), agents);
+    const captured = await setupCapture([
+      "",
+      "",
+      "",
+      "",
+      "README.md, AGENTS.md",
+      "",
+    ]);
+    expect(
+      await runCli(["init", "--directory", directory], captured.dependencies),
+    ).toBe(0);
+    const config = parseConfig(
+      parseJson(
+        await readFile(join(directory, "gus.config.json"), "utf8"),
+        "config",
+      ),
+    );
+    expect(config.contextFiles).toEqual(["README.md", "AGENTS.md"]);
+    expect(await readFile(join(directory, "README.md"), "utf8")).toBe(readme);
+    expect(await readFile(join(directory, "AGENTS.md"), "utf8")).toBe(agents);
+    expect(captured.scripted.prompts[4]).toContain(
+      "Suggested: README.md, AGENTS.md",
+    );
+    const instructions = [
+      ...captured.stdout,
+      ...captured.scripted.prompts,
+    ].join("\n");
+    expect(instructions).toContain("loaded in full");
+    expect(instructions).toContain("repeated model turns");
+    expect(instructions).toContain("concise review-policy file");
+  });
+
   it("allows corrections in place and never saves or reports an entered credential value", async () => {
     const directory = await temporaryDirectory();
     const secretValue = "sk-actual-secret-value";
@@ -269,11 +307,17 @@ describe("setup guidance validation", () => {
 
 describe("noninteractive init", () => {
   it.each([true, false])(
-    "uses only existing safe root guidance without prompting when interactive=%s",
+    "does not preload discovered large guidance or prompt when interactive=%s",
     async (interactive) => {
       const directory = await temporaryDirectory();
-      await writeFile(join(directory, "README.md"), "Readme guidance.");
-      await writeFile(join(directory, "AGENTS.md"), "Agent guidance.");
+      await writeFile(
+        join(directory, "README.md"),
+        "Readme guidance.\n".repeat(3000),
+      );
+      await writeFile(
+        join(directory, "AGENTS.md"),
+        "Agent guidance.\n".repeat(3000),
+      );
       await writeFile(
         join(directory, "custom-policy.md"),
         "Not automatically selected.",
@@ -297,7 +341,10 @@ describe("noninteractive init", () => {
           "config",
         ),
       );
-      expect(config.contextFiles).toEqual(["README.md", "AGENTS.md"]);
+      expect(config.contextFiles).toEqual([]);
+      expect(captured.stdout.join("")).toContain(
+        "No repository guidance files are preloaded",
+      );
     },
   );
 

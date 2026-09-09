@@ -13,6 +13,7 @@ import {
   type InspectionCoverage,
 } from "./logic/inspection-coverage.js";
 import { fitSourcePages } from "./logic/fit-source-pages.js";
+import { createPinnedReadCache } from "./logic/pinned-read-cache.js";
 import {
   diffEvidence,
   fileEvidence,
@@ -38,27 +39,35 @@ export function createRepositoryTools(
 ): RepositoryTools {
   const maxChars = config.review.maxToolOutputChars;
   const coverage = createInspectionCoverage();
+  const readCache = createPinnedReadCache({
+    snapshot: () => repository.snapshot,
+    now: Date.now,
+  });
   return {
     definitions: repositoryToolDefinitions,
     execute: async (name, argumentsValue, options) => {
       try {
         switch (name) {
-          case "read_file":
-            return await readFileTool(
-              repository,
-              fileArguments.parse(argumentsValue),
-              maxChars,
-              coverage,
+          case "read_file": {
+            const request = fileArguments.parse(argumentsValue);
+            return await readCache.run(
+              "read_file",
+              [request],
+              () =>
+                readFileTool(repository, request, maxChars, coverage, options),
               options,
             );
-          case "read_files":
-            return await readFilesTool(
-              repository,
-              filesArguments.parse(argumentsValue),
-              maxChars,
-              coverage,
+          }
+          case "read_files": {
+            const request = filesArguments.parse(argumentsValue);
+            return await readCache.run(
+              "read_files",
+              request.files,
+              () =>
+                readFilesTool(repository, request, maxChars, coverage, options),
               options,
             );
+          }
           case "list_files":
             return await listFilesTool(
               repository,

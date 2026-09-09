@@ -1,6 +1,7 @@
 import type { GusConfig } from "../config/config-schema.js";
 import type { ReviewSubject } from "../review/review-ports.js";
 import type { ReviewFinding, ReviewResult } from "../review/review-schema.js";
+import { formatModelUsage } from "./logic/format-model-usage.js";
 import {
   addReportIdentity,
   formatFindingMarker,
@@ -148,6 +149,8 @@ export function formatReviewMarkdown(
     "---",
     "",
     `Models: ${usage.models.map((model) => `\`${escapeCode(model)}\``).join(", ") || "none"}. ${usage.requests} requests, ${usage.toolCalls} tool calls. ${accounting} ${cost}`,
+    "",
+    ...formatModelUsage(usage.calls ?? []),
     "",
     formatReviewState(stateFromReview(review)),
   );

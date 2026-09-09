@@ -6,7 +6,17 @@ import type {
   ModelMessage,
   ModelTool,
 } from "./review-ports.js";
-import type { ReviewUsage } from "./review-schema.js";
+import type {
+  ReviewModelCallContext,
+  ReviewModelCallUsage,
+  ReviewUsage,
+} from "./review-schema.js";
+
+interface PendingModelCall {
+  startedAt: number;
+  allowedToolNames: Set<string>;
+  usage: ReviewModelCallUsage;
+}
 
 export class ReviewBudget {
   readonly deadline: number;
@@ -20,6 +30,8 @@ export class ReviewBudget {
   private costKnown = true;
   private tokensKnown = true;
   private readonly models = new Set<string>();
+  private readonly calls: ReviewModelCallUsage[] = [];
+  private pendingCall: PendingModelCall | null = null;
 
   constructor(
     private readonly config: GusConfig,
@@ -34,6 +46,7 @@ export class ReviewBudget {
     messages: ModelMessage[],
     tools: ModelTool[],
     requestedOutput: number,
+    context?: ReviewModelCallContext,
   ): number {
     this.requireTime();
     if (this.turns >= this.config.review.maxTurns)
@@ -72,10 +85,50 @@ export class ReviewBudget {
       );
     this.turns += 1;
     this.requests += 1;
+    this.pendingCall = context
+      ? {
+          startedAt: this.now(),
+          allowedToolNames: new Set(tools.map((tool) => tool.name)),
+          usage: {
+            stage: context.stage,
+            model: context.model,
+            trigger: context.trigger,
+            policyChars: context.policyChars,
+            turn: this.turns,
+            inputChars: serialized.length,
+            systemChars: messages.reduce(
+              (total, message) =>
+                total +
+                (message.role === "system" ? message.content.length : 0),
+              0,
+            ),
+            seedChars:
+              messages.find((message) => message.role === "user")?.content
+                .length ?? 0,
+            toolResultChars: messages.reduce(
+              (total, message) =>
+                total + (message.role === "tool" ? message.content.length : 0),
+              0,
+            ),
+            toolDefinitionChars: JSON.stringify(tools).length,
+            inputTokens: null,
+            outputTokens: null,
+            costUsd: null,
+            attempts: 1,
+            elapsedMs: 0,
+            status: "failed",
+            toolNames: [],
+          },
+        }
+      : null;
     return outputLimit;
   }
 
   recordCompletion(completion: ModelCompletion): void {
+    this.finishModelCall(
+      Math.max(1, completion.requestAttempts ?? 1),
+      completion,
+    );
     this.requests += Math.max(0, (completion.requestAttempts ?? 1) - 1);
     this.models.add(completion.model);
     if (completion.usageAvailable === false) {
@@ -130,14 +183,17 @@ export class ReviewBudget {
   }
 
   recordModelFailure(error: unknown): void {
+    let attempts = 1;
     if (
       typeof error === "object" &&
       error !== null &&
       "requestAttempts" in error &&
       validCount(error.requestAttempts)
     ) {
+      attempts = error.requestAttempts;
       this.requests += error.requestAttempts - 1;
     }
+    this.finishModelCall(attempts);
     this.tokensKnown = false;
     this.costKnown = false;
   }
@@ -200,7 +256,47 @@ export class ReviewBudget {
       elapsedMs: Math.max(0, this.now() - this.startedAt),
       models: [...this.models],
       usageComplete: this.tokensKnown && this.costKnown,
+      calls: this.calls.map((call) => ({
+        ...call,
+        toolNames: [...call.toolNames],
+      })),
     };
+  }
+
+  private finishModelCall(
+    attempts: number,
+    completion?: ModelCompletion,
+  ): void {
+    const pending = this.pendingCall;
+    this.pendingCall = null;
+    if (!pending) return;
+    const call = pending.usage;
+    call.attempts = attempts;
+    call.elapsedMs = Math.max(0, this.now() - pending.startedAt);
+    if (completion) {
+      call.model = completion.model;
+      call.status = "completed";
+      const usageAvailable = completion.usageAvailable !== false;
+      call.inputTokens =
+        usageAvailable && validCount(completion.inputTokens)
+          ? completion.inputTokens
+          : null;
+      call.outputTokens =
+        usageAvailable && validCount(completion.outputTokens)
+          ? completion.outputTokens
+          : null;
+      call.costUsd =
+        usageAvailable &&
+        completion.costUsd !== null &&
+        Number.isFinite(completion.costUsd) &&
+        completion.costUsd >= 0
+          ? completion.costUsd
+          : null;
+      call.toolNames = completion.toolCalls.map((tool) =>
+        pending.allowedToolNames.has(tool.name) ? tool.name : "unsupported",
+      );
+    }
+    this.calls.push(call);
   }
 
   private requireTime(): void {
