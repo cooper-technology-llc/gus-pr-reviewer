@@ -64,7 +64,7 @@ export async function setupConfiguration(
       usesDefaultProvider ? defaultConfig.provider.apiKeyEnv : "MODEL_API_KEY",
     );
     const personality = await ask(
-      "Gus's voice: dry, warm, spicy, or off",
+      "Gus's voice: dry, warm, snarky, or off",
       personalityChoice,
       defaultConfig.personality.style,
     );
@@ -160,7 +160,7 @@ function makeConfiguration(
   baseUrl: string,
   model: string,
   apiKeyEnv: string,
-  personality: "dry" | "warm" | "spicy" | "off",
+  personality: "dry" | "warm" | "snarky" | "off",
   contextFiles: string[],
   maxTotalTokens: number,
 ): GusConfigInput {
@@ -227,15 +227,15 @@ function apiKeyEnvironmentName(value: string): string {
   return value;
 }
 
-function personalityChoice(value: string): "dry" | "warm" | "spicy" | "off" {
+function personalityChoice(value: string): "dry" | "warm" | "snarky" | "off" {
   if (
     value === "dry" ||
     value === "warm" ||
-    value === "spicy" ||
+    value === "snarky" ||
     value === "off"
   )
     return value;
-  throw new GusError("INPUT_INVALID", "Choose dry, warm, spicy, or off.");
+  throw new GusError("INPUT_INVALID", "Choose dry, warm, snarky, or off.");
 }
 
 function tokenBudget(value: string): number {

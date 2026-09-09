@@ -129,12 +129,13 @@ Changing the runtime does not change where trusted repository policy is loaded.
 | Setting                | Default | Meaning                                      |
 | ---------------------- | ------- | -------------------------------------------- |
 | `personality.enabled`  | `true`  | Add a reaction after technical adjudication. |
-| `personality.style`    | `dry`   | `warm`, `dry`, or `spicy`.                   |
+| `personality.style`    | `dry`   | `warm`, `dry`, or `snarky`.                  |
 | `personality.maxChars` | `600`   | Maximum reaction length.                     |
 
-The reaction cannot change findings, grades, or the verdict. The default spicy
-prompt roasts demonstrated code problems, never the author. Set `enabled` to
-`false` to omit the reaction entirely.
+The reaction cannot change findings, grades, or the verdict. Every bundled style
+keeps humor professional and appropriate for a workplace code review. `snarky`
+adds wry, mildly sarcastic teasing of demonstrated code problems, never the
+author. Set `enabled` to `false` to omit the reaction entirely.
 
 ## Scope and limits
 

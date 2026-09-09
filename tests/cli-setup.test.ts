@@ -156,7 +156,7 @@ describe("guided init", () => {
       "NODE_OPTIONS",
       "MODEL_API_KEY",
       "loud",
-      "spicy",
+      "snarky",
       "",
       "0",
       "2000001",
@@ -170,7 +170,7 @@ describe("guided init", () => {
     const config = parseConfig(parseJson(text, "config"));
     expect(config.provider.apiKeyEnv).toBe("MODEL_API_KEY");
     expect(config.review.maxTotalTokens).toBe(75000);
-    expect(config.personality.style).toBe("spicy");
+    expect(config.personality.style).toBe("snarky");
     expect(text).not.toContain(secretValue);
     expect(captured.stdout.join("")).not.toContain(secretValue);
     expect(captured.stderr.join("")).not.toContain(secretValue);

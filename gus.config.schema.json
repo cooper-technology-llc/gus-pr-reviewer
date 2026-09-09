@@ -253,7 +253,7 @@
         "style": {
           "default": "dry",
           "type": "string",
-          "enum": ["warm", "dry", "spicy"]
+          "enum": ["warm", "dry", "snarky"]
         },
         "maxChars": {
           "default": 600,

@@ -237,7 +237,7 @@ describe("reviewChange", () => {
     expect(voiceRequests[0]?.messages[0]?.content).toBe(
       input.prompts.personality,
     );
-    expect(JSON.stringify(voiceRequests[0]?.messages)).not.toContain("spicy");
+    expect(JSON.stringify(voiceRequests[0]?.messages)).not.toContain("snarky");
   });
 
   it("counts usage across every required stage", async () => {
