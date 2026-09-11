@@ -19,7 +19,7 @@ export function reviewDslContract(
   ];
   if (stage === "investigate" || stage === "validate") {
     rules.push(
-      "SUMMARY, RISK, ARCHITECTURE, and TESTS are required exactly once. Grades must be A/B/C/D/F with a reason, or explicit none with no body. Repeated QUESTION, FINDING, COVERAGE, PRIOR, and CANDIDATE records form lists; omit a record kind for an empty list. Findings require all four prose sections in the shown order and a nonempty EVIDENCE line. Other evidence-bearing records require an EVIDENCE line, which may be bare when evidence is missing; the host still enforces coverage and reconciliation.",
+      "SUMMARY, RISK, ARCHITECTURE, and TESTS are required exactly once. Grades must be A/B/C/D/F with a reason, or explicit none with no body. Repeated QUESTION, FINDING, COVERAGE, PRIOR, and CANDIDATE records form lists; omit a record kind for an empty list. Findings require all four prose sections in the shown order and a nonempty EVIDENCE line. Other evidence-bearing records require an EVIDENCE line, which may be bare when evidence is missing. COVERAGE is optional; the host completes it from seed patches and recorded inspections. The host still enforces reconciliation.",
     );
     rules.push(
       stage === "validate"

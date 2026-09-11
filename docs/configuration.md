@@ -163,21 +163,23 @@ author. Set `enabled` to `false` to omit the reaction entirely.
 
 ## Scope and limits
 
-| Setting                      | Default            |
-| ---------------------------- | ------------------ |
-| `review.maxTurns`            | `20`               |
-| `review.maxToolCalls`        | `80`               |
-| `review.maxDurationMs`       | `600000`           |
-| `review.maxInputChars`       | `220000`           |
-| `review.maxOutputTokens`     | `8192` per request |
-| `review.maxTotalTokens`      | `180000`           |
-| `review.maxCostUsd`          | `null`             |
-| `review.maxFiles`            | `500`              |
-| `review.maxFileBytes`        | `120000`           |
-| `review.maxDiffCharsPerFile` | `16000`            |
-| `review.maxToolOutputChars`  | `32000`            |
-| `review.blockingSeverity`    | `major`            |
-| `review.scorecard`           | `true`             |
+| Setting                        | Default            |
+| ------------------------------ | ------------------ |
+| `review.maxTurns`              | `20`               |
+| `review.maxToolCalls`          | `80`               |
+| `review.maxDurationMs`         | `600000`           |
+| `review.maxInputChars`         | `220000`           |
+| `review.maxOutputTokens`       | `8192` per request |
+| `review.maxTotalTokens`        | `180000`           |
+| `review.maxCostUsd`            | `null`             |
+| `review.maxFiles`              | `500`              |
+| `review.maxFileBytes`          | `120000`           |
+| `review.maxDiffCharsPerFile`   | `16000`            |
+| `review.maxToolOutputChars`    | `32000`            |
+| `review.maxSubmitContextChars` | `180000`           |
+| `review.maxSubmitSeedChars`    | `100000`           |
+| `review.blockingSeverity`      | `major`            |
+| `review.scorecard`             | `true`             |
 
 `maxCostUsd` is a stop threshold using observed provider cost, not a hard dollar
 guarantee. An in-flight request can exceed it. Providers that omit cost leave

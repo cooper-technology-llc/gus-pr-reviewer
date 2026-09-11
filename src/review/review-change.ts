@@ -1,6 +1,4 @@
 import { GusError } from "../errors.js";
-import type { ReviewInput } from "./review-ports.js";
-import type { ReviewResult } from "./review-schema.js";
 import {
   buildCoverage,
   isBlocking,
@@ -13,6 +11,8 @@ import {
 } from "./logic/adjudicate-review.js";
 import { addEvidence, seedDiffEvidence } from "./logic/review-evidence.js";
 import { ReviewBudget } from "./review-budget.js";
+import type { ReviewInput } from "./review-ports.js";
+import type { ReviewResult } from "./review-schema.js";
 import {
   buildReviewSeed,
   changeSize,
@@ -20,16 +20,16 @@ import {
   highestRisk,
 } from "./review-seed.js";
 import {
+  type Analysis,
   analysisSchema,
   personalityOutputSchema,
   reportNarrativeSchema,
   stageTriageSchema,
   validationSchema,
-  type Analysis,
 } from "./stage-schemas.js";
 import {
-  runStructuredStage,
   type ReviewEvidenceState,
+  runStructuredStage,
 } from "./structured-stage.js";
 
 /** Reviews a pinned change through evidence collection, validation, reporting, and optional voice. */
@@ -47,6 +47,7 @@ export async function reviewChange(input: ReviewInput): Promise<ReviewResult> {
     notices: [],
   };
   const result = initialReview(input, budget, prior);
+  let assessmentApplied = false;
   try {
     if (prior.length > 100)
       throw new GusError(
@@ -127,6 +128,7 @@ export async function reviewChange(input: ReviewInput): Promise<ReviewResult> {
         );
     }
     applyValidatedAssessment(result, validation, input, state, prior);
+    assessmentApplied = true;
     const report = await runStructuredStage({
       input,
       stage: "report",
@@ -141,6 +143,15 @@ export async function reviewChange(input: ReviewInput): Promise<ReviewResult> {
     result.verdict = "incomplete";
     result.architecture = null;
     result.tests = null;
+    if (!assessmentApplied) {
+      result.coverage = buildCoverage(
+        input.repository.files,
+        [],
+        state.inspectedPaths,
+      );
+      result.summary =
+        "The review stopped before a complete assessment. Coverage records seeded patches and repository inspections the host already collected.";
+    }
     state.limitations.push(describeReviewFailure(error));
   }
   result.evidence = [...state.evidence.values()];

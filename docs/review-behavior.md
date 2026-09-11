@@ -36,7 +36,9 @@ constraint for investigation, validation, reporting, or personality.
 
 Triage keeps its small JSON response. Investigation and validation can still use
 native read-only tools while collecting evidence; their final text uses
-`REVIEW v1`. Reporting and personality have no tools. A separate model and
+`REVIEW v1`. If that fat conversation can no longer fit the review budget, the
+host starts a compact no-tool submit from the seed and recorded notes instead of
+aborting. Reporting and personality have no tools. A separate model and
 reasoning setting can be selected for each stage through `provider.stages`.
 
 An assessment looks like this:
@@ -73,23 +75,24 @@ cannot grant permissions or invent a successful check result.
 
 The assessment records are:
 
-| Record                                                             | Content                                                                      |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `SUMMARY`                                                          | Required multiline summary.                                                  |
-| `RISK \| low/medium/high`                                          | Required risk classification; the host retains its deterministic floor.      |
-| `ARCHITECTURE \| A/B/C/D/F` and `TESTS \| A/B/C/D/F`               | Grade followed by its explanation, or an explicit `none` instead of a grade. |
-| `QUESTION`                                                         | An open question; repeat for additional questions.                           |
-| `FINDING \| id \| severity \| path \| line \| side \| disposition` | A finding with `TITLE`, `TRIGGER`, `IMPACT`, `FIX`, and `EVIDENCE` sections. |
-| `COVERAGE \| path \| inspected/partial/unreviewed`                 | A reason followed by `EVIDENCE`.                                             |
-| `PRIOR \| id \| still-open/resolved/rejected/unverified`           | Current reconciliation reason followed by `EVIDENCE`.                        |
-| `CANDIDATE \| id \| confirmed/rejected/unverified`                 | Validation-stage resolution reason followed by `EVIDENCE`.                   |
-| `EVIDENCE \| id \| another-id`                                     | Evidence IDs for the current finding, coverage, prior, or candidate record.  |
+| Record                                                             | Content                                                                                                    |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `SUMMARY`                                                          | Required multiline summary.                                                                                |
+| `RISK \| low/medium/high`                                          | Required risk classification; the host retains its deterministic floor.                                    |
+| `ARCHITECTURE \| A/B/C/D/F` and `TESTS \| A/B/C/D/F`               | Grade followed by its explanation, or an explicit `none` instead of a grade.                               |
+| `QUESTION`                                                         | An open question; repeat for additional questions.                                                         |
+| `FINDING \| id \| severity \| path \| line \| side \| disposition` | A finding with `TITLE`, `TRIGGER`, `IMPACT`, `FIX`, and `EVIDENCE` sections.                               |
+| `COVERAGE \| path \| inspected/partial/unreviewed`                 | Optional. A reason followed by `EVIDENCE`. The host fills omitted files from seed patches and inspections. |
+| `PRIOR \| id \| still-open/resolved/rejected/unverified`           | Current reconciliation reason followed by `EVIDENCE`.                                                      |
+| `CANDIDATE \| id \| confirmed/rejected/unverified`                 | Validation-stage resolution reason followed by `EVIDENCE`.                                                 |
+| `EVIDENCE \| id \| another-id`                                     | Evidence IDs for the current finding, coverage, prior, or candidate record.                                |
 
 Severity is `critical`, `major`, or `minor`; side is `LEFT` or `RIGHT`;
 disposition is `blocking` or `follow-up`. Findings require a positive integer
 line. Repeating record kinds creates lists; omitting them means an empty list.
-This does not bypass required coverage or reconciliation of supplied candidates
-and prior findings. A bare `EVIDENCE` records missing evidence for coverage or
+This does not bypass reconciliation of supplied candidates and prior findings.
+The host completes omitted coverage from complete seed patches and recorded
+inspections; truncated unread files stay partial. A bare `EVIDENCE` records missing evidence for coverage or
 reconciliation; a finding must have at least one actual evidence ID. `END` is
 required on its own line.
 

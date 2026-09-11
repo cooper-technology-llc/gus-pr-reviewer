@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
+
 import type { GusConfig } from "../../config/config-schema.js";
-import type { Analysis, CoverageClaim, Validation } from "../stage-schemas.js";
 import type {
   ChangedFile,
   FindingReconciliation,
@@ -10,6 +10,7 @@ import type {
   ReviewFinding,
   ReviewSnapshot,
 } from "../review-schema.js";
+import type { Analysis, CoverageClaim, Validation } from "../stage-schemas.js";
 import { isCurrentEvidence } from "./review-evidence.js";
 
 export interface PriorFinding {
@@ -372,13 +373,27 @@ export function buildCoverage(
         status: "unreviewed",
         reason: "Binary content is unavailable to the text reviewer.",
       };
-    if (!claim)
+    if (!claim) {
+      if (inspectedPaths.has(file.path))
+        return {
+          path: file.path,
+          status: "inspected",
+          reason: "The host recorded a repository inspection for this file.",
+        };
+      if (!file.truncated && file.patch.length > 0)
+        return {
+          path: file.path,
+          status: "inspected",
+          reason: "The host supplied the complete seed patch for this file.",
+        };
       return {
         path: file.path,
-        status: "unreviewed",
-        reason:
-          "The review did not complete an evidence-backed assessment for this file.",
+        status: file.truncated ? "partial" : "unreviewed",
+        reason: file.truncated
+          ? "The patch was truncated and a complete file read was not recorded."
+          : "The review did not complete an evidence-backed assessment for this file.",
       };
+    }
     if (file.truncated && !inspectedPaths.has(file.path))
       return {
         path: file.path,
