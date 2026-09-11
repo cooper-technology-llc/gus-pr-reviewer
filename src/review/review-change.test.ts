@@ -1,8 +1,9 @@
 // End-to-end fake-client reviews prove adaptive reads, honest failure states, evidence checks, and frozen voice.
 import { describe, expect, it } from "vitest";
+
 import { configSchema } from "../config/config-schema.js";
-import type { ModelRequest } from "./review-ports.js";
 import { reviewChange } from "./review-change.js";
+import type { ModelRequest } from "./review-ports.js";
 import {
   answerStage,
   fileExecution,
@@ -89,7 +90,7 @@ describe("reviewChange", () => {
       tests: null,
       usage: { requests: 2 },
     });
-    expect(result.coverage[0]?.status).toBe("unreviewed");
+    expect(result.coverage[0]?.status).toBe("inspected");
   });
 
   it("stops when a repository inspection consumes the remaining time", async () => {
@@ -272,6 +273,52 @@ describe("reviewChange", () => {
     expect(calls).toBe(0);
     expect(result.verdict).toBe("incomplete");
     expect(result.coverage).toHaveLength(1);
+  });
+
+  it("rebuilds a compact no-tool submit when investigation context no longer fits the budget", async () => {
+    const input = reviewTestInput({
+      config: configSchema.parse({
+        review: { maxInputChars: 14000, maxTotalTokens: 2_000_000 },
+        personality: { enabled: false },
+      }),
+    });
+    const huge = "x".repeat(12000);
+    let investigations = 0;
+    const requests: ModelRequest[] = [];
+    input.model = {
+      complete: async (request) => {
+        requests.push({
+          ...request,
+          messages: request.messages.map((message) => ({ ...message })),
+        });
+        if (request.stage === "investigate") {
+          investigations += 1;
+          if (investigations === 1)
+            return toolCompletion("read", "read_file", "src/a.ts");
+        }
+        return answerStage(request);
+      },
+    };
+    input.tools.execute = async () => ({
+      ...fileExecution("huge", "src/a.ts", "export const value = 2;"),
+      content: huge,
+    });
+    const result = await reviewChange(input);
+    expect(result.verdict).toBe("ready");
+    expect(result.diagnostics).toContain(
+      "Investigation context no longer fit the review budget; the host rebuilt a compact DSL submit.",
+    );
+    const compact = requests.find(
+      (request) =>
+        request.stage === "investigate" &&
+        request.tools.length === 0 &&
+        request.messages.some((message) =>
+          message.content.includes("Compact submit"),
+        ),
+    );
+    expect(compact).toBeDefined();
+    expect(compact?.jsonMode).toBe(false);
+    expect(result.coverage[0]?.status).toBe("inspected");
   });
 
   it("rejects a length-truncated finding even if its JSON happens to parse", async () => {

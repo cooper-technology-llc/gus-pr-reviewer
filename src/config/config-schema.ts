@@ -67,6 +67,8 @@ export const configSchema = z.strictObject({
       maxFileBytes: positiveLimit.max(2000000).default(120000),
       maxDiffCharsPerFile: positiveLimit.max(500000).default(16000),
       maxToolOutputChars: positiveLimit.max(200000).default(32000),
+      maxSubmitContextChars: positiveLimit.max(2000000).default(180000),
+      maxSubmitSeedChars: positiveLimit.max(2000000).default(100000),
       blockingSeverity: z.enum(["critical", "major", "minor"]).default("major"),
       scorecard: z.boolean().default(true),
       exclude: z

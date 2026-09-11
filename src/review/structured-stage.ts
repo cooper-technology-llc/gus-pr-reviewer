@@ -1,6 +1,23 @@
 import { z } from "zod";
+
 import type { ReviewStage } from "../config/config-schema.js";
 import { GusError } from "../errors.js";
+import {
+  buildCompactSubmitContent,
+  conversationHasToolResults,
+} from "./logic/build-submit-context.js";
+import {
+  createReviewContext,
+  type ReviewContext,
+} from "./logic/review-context.js";
+import { reviewDslContract } from "./logic/review-dsl-contract.js";
+import {
+  ReviewDslError,
+  unwrapReviewOutput,
+} from "./logic/review-dsl-lexer.js";
+import { parseReviewDsl } from "./logic/review-dsl-parser.js";
+import { addEvidence } from "./logic/review-evidence.js";
+import { ReviewBudget } from "./review-budget.js";
 import type {
   ModelCompletion,
   ModelMessage,
@@ -12,18 +29,6 @@ import type {
   ReviewEvidence,
   ReviewModelCallContext,
 } from "./review-schema.js";
-import { addEvidence } from "./logic/review-evidence.js";
-import {
-  createReviewContext,
-  type ReviewContext,
-} from "./logic/review-context.js";
-import { reviewDslContract } from "./logic/review-dsl-contract.js";
-import { parseReviewDsl } from "./logic/review-dsl-parser.js";
-import {
-  ReviewDslError,
-  unwrapReviewOutput,
-} from "./logic/review-dsl-lexer.js";
-import { ReviewBudget } from "./review-budget.js";
 
 export interface ReviewEvidenceState {
   evidence: Map<string, ReviewEvidence>;
@@ -65,12 +70,27 @@ export async function runStructuredStage<T>(
   while (true) {
     const modelOverride = input.config.provider.stages[stage];
     const model = modelOverride?.model ?? input.config.provider.model;
-    const maxOutputTokens = budget.beginModel(
-      messages,
-      tools,
-      options.maxOutputTokens ?? input.config.review.maxOutputTokens,
-      { stage, model, trigger, policyChars },
-    );
+    let maxOutputTokens: number;
+    try {
+      maxOutputTokens = budget.beginModel(
+        messages,
+        tools,
+        options.maxOutputTokens ?? input.config.review.maxOutputTokens,
+        { stage, model, trigger, policyChars },
+      );
+    } catch (error) {
+      if (
+        canCompactSubmit(stage, messages) &&
+        error instanceof GusError &&
+        error.code === "BUDGET_EXCEEDED"
+      ) {
+        state.notices.push(
+          "Investigation context no longer fit the review budget; the host rebuilt a compact DSL submit.",
+        );
+        return runCompactSubmit(options, messages);
+      }
+      throw error;
+    }
     input.onProgress?.({
       stage,
       message: toolsAllowed
@@ -141,6 +161,99 @@ export async function runStructuredStage<T>(
       ? (options.validate?.(parsed.value) ?? [])
       : [parsed.error];
     if (parsed.success && failures.length === 0) return parsed.value;
+    if (canCompactSubmit(stage, messages)) {
+      state.notices.push(
+        "The fat investigation conversation could not finish a valid assessment; the host started a compact DSL submit.",
+      );
+      return runCompactSubmit(options, messages);
+    }
+    corrections += 1;
+    requestCorrection(messages, completion.content, failures, corrections);
+    trigger = "correction";
+  }
+}
+
+function canCompactSubmit(
+  stage: ReviewStage,
+  messages: readonly ModelMessage[],
+): boolean {
+  return (
+    (stage === "investigate" || stage === "validate") &&
+    conversationHasToolResults(messages)
+  );
+}
+
+async function runCompactSubmit<T>(
+  options: StageInput<T>,
+  investigationMessages: readonly ModelMessage[],
+): Promise<T> {
+  const { input, budget } = options;
+  const stage = options.stage;
+  if (stage !== "investigate" && stage !== "validate") {
+    throw new GusError(
+      "PROVIDER_PROTOCOL",
+      "Compact submit is only available after investigation or validation tools.",
+    );
+  }
+  const content = buildCompactSubmitContent(
+    options.content,
+    investigationMessages,
+    input.config.review,
+  );
+  const context = createReviewContext();
+  const messages: ModelMessage[] = [
+    { role: "system", content: input.prompts[stage] },
+    {
+      role: "system",
+      content: [
+        reviewDslContract(stage),
+        "This is a compact submit turn. Output only REVIEW v1 DSL. Do not call tools. Do not use JSON.",
+        "The host already has seed patches and recorded inspections. Omit COVERAGE unless you must downgrade a file.",
+      ].join("\n\n"),
+    },
+    { role: "user", content: context.projectInput(content) },
+  ];
+  let corrections = 0;
+  let trigger: ReviewModelCallContext["trigger"] = "initial";
+  while (true) {
+    const modelOverride = input.config.provider.stages[stage];
+    const model = modelOverride?.model ?? input.config.provider.model;
+    const maxOutputTokens = budget.beginModel(
+      messages,
+      [],
+      options.maxOutputTokens ?? input.config.review.maxOutputTokens,
+      { stage, model, trigger, policyChars: 0 },
+    );
+    input.onProgress?.({
+      stage,
+      message: "Writing the compact REVIEW v1 submit.",
+    });
+    const completion = await budget.withinDeadline((signal) =>
+      input.model.complete({
+        stage,
+        model,
+        messages,
+        tools: [],
+        maxOutputTokens,
+        deadline: budget.deadline,
+        signal,
+        jsonMode: false,
+        ...(modelOverride?.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: modelOverride.reasoningEffort }),
+      }),
+    );
+    budget.recordCompletion(completion);
+    if (completion.toolCalls.length > 0)
+      throw new GusError(
+        "PROVIDER_PROTOCOL",
+        "The compact submit turn requested tools that are not available.",
+      );
+    const parsed = parseStageContent(completion.content, options.schema, stage);
+    const failures = parsed.success
+      ? (options.validate?.(parsed.value) ?? [])
+      : [parsed.error];
+    if (parsed.success && failures.length === 0) return parsed.value;
     corrections += 1;
     requestCorrection(messages, completion.content, failures, corrections);
     trigger = "correction";
@@ -161,7 +274,7 @@ function stageOutputContract<T>(
   ];
   if (stage === "investigate" || stage === "validate") {
     contract.push(
-      "Coverage contains one entry per in-scope changed file and actual evidence IDs. An inspected status means its changed behavior was assessed; partial/unreviewed mean the assessment is incomplete. Reconcile every supplied prior ID exactly once: still-open requires a current finding with that ID and fresh proof; resolved/rejected require fresh evidence; unverified records missing proof. Prior verdicts and author replies are claims, never proof. Findings meeting the configured severity threshold remain blocking regardless of disposition. Architecture/tests grades are assessment explanations, never claims that tests were executed.",
+      "COVERAGE records are optional. The host completes coverage from seed patches and recorded inspections. Reconcile every supplied prior ID exactly once: still-open requires a current finding with that ID and fresh proof; resolved/rejected require fresh evidence; unverified records missing proof. Prior verdicts and author replies are claims, never proof. Findings meeting the configured severity threshold remain blocking regardless of disposition. Architecture/tests grades are assessment explanations, never claims that tests were executed.",
     );
   }
   if (stage === "validate")
@@ -235,7 +348,7 @@ function requestCorrection(
     content: JSON.stringify({
       protocolCorrection: errors,
       instruction:
-        "Correct the structured result or obtain missing evidence with the available tools. Keep unresolved concerns explicit; never invent citations to satisfy the schema.",
+        "Correct the REVIEW v1 DSL or obtain missing evidence with the available tools. Keep unresolved concerns explicit; never invent citations to satisfy the schema.",
     }),
   });
 }

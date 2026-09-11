@@ -160,7 +160,7 @@ describe("DSL review submissions", () => {
     });
   });
 
-  it("keeps omitted coverage incomplete even when the DSL is syntactically complete", async () => {
+  it("treats omitted coverage as inspected when the host supplied a complete seed patch", async () => {
     const input = reviewTestInput();
     input.model = {
       complete: async (request) => {
@@ -177,12 +177,14 @@ describe("DSL review submissions", () => {
       },
     };
     const result = await reviewChange(input);
-    expect(result).toMatchObject({
-      verdict: "incomplete",
-      architecture: null,
-      tests: null,
+    expect(result.verdict).toBe("changes-requested");
+    expect(result.coverage[0]).toMatchObject({
+      path: "src/a.ts",
+      status: "inspected",
     });
-    expect(result.coverage[0]?.status).toBe("unreviewed");
+    expect(
+      result.limitations.some((limitation) => limitation.includes("src/a.ts:")),
+    ).toBe(false);
   });
 
   it("omits malformed personality blocks without changing frozen technical findings", async () => {

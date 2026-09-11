@@ -150,6 +150,18 @@
           "exclusiveMinimum": 0,
           "maximum": 200000
         },
+        "maxSubmitContextChars": {
+          "default": 180000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 2000000
+        },
+        "maxSubmitSeedChars": {
+          "default": 100000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 2000000
+        },
         "blockingSeverity": {
           "default": "major",
           "type": "string",
