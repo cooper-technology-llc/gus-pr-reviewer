@@ -4,6 +4,7 @@ import { reviewChange } from "./review-change.js";
 import {
   answerStage,
   fileExecution,
+  isValidationEvidenceCorrection,
   jsonCompletion,
   parentEvidence,
   reviewTestInput,
@@ -151,11 +152,20 @@ describe("current review reconciliation", () => {
       }),
     ]);
     let investigations = 0;
+    let validationReads = 0;
     input.model = {
       complete: async (request) => {
         if (request.stage === "investigate" && investigations++ === 0)
           return toolCompletion("caller", "read_file", "src/caller.ts");
-        if (request.stage === "validate")
+        if (request.stage === "validate") {
+          if (isValidationEvidenceCorrection(request)) {
+            validationReads += 1;
+            return toolCompletion(
+              `validation-${validationReads}`,
+              "read_file",
+              validationReads === 1 ? "src/a.ts" : "src/caller.ts",
+            );
+          }
           return jsonCompletion({
             ...analysis,
             candidateResolutions: [
@@ -168,11 +178,31 @@ describe("current review reconciliation", () => {
               },
             ],
           });
+        }
         return answerStage(request, analysis);
       },
     };
-    input.tools.execute = async () =>
-      fileExecution("caller-proof", "src/caller.ts", "consume(value, 1);");
+    input.tools.execute = async (_name, argumentsValue) => {
+      const path =
+        typeof argumentsValue === "object" &&
+        argumentsValue !== null &&
+        "path" in argumentsValue &&
+        typeof argumentsValue.path === "string"
+          ? argumentsValue.path
+          : "src/caller.ts";
+      if (path === "src/a.ts")
+        return {
+          content: "Read removed parent source.",
+          inspectedPaths: [path],
+          warnings: [],
+          evidence: [parentEvidence()],
+        };
+      return fileExecution(
+        "caller-proof",
+        "src/caller.ts",
+        "consume(value, 1);",
+      );
+    };
     const result = await reviewChange(input);
     expect(result.verdict).toBe("changes-requested");
     expect(result.findings[0]?.side).toBe("LEFT");

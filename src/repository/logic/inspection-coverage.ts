@@ -15,6 +15,15 @@ export interface InspectionCoverage {
   record(page: InspectionPage): boolean;
 }
 
+/** Counts only complete seed rows that match the pinned full patch exactly. */
+export function seededPatchRows(seed: string, patch: string): number {
+  if (seed.length === 0 || !patch.startsWith(seed)) return 0;
+  const complete = seed === patch || seed.endsWith("\n");
+  const rows = seed.split("\n");
+  if (rows.at(-1) === "") rows.pop();
+  return Math.max(0, rows.length - (complete ? 0 : 1));
+}
+
 /** Marks a path complete only after one immutable source or diff has been delivered without gaps. */
 export function createInspectionCoverage(): InspectionCoverage {
   const inspected = new Map<

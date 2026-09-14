@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { z } from "zod";
 
 import type { ReviewStage } from "../config/config-schema.js";
@@ -46,6 +47,9 @@ interface StageInput<T> {
   state: ReviewEvidenceState;
   validate?: (result: T) => string[];
   maxOutputTokens?: number;
+  reserveTokens?: number | (() => number);
+  compactOnInvalid?: boolean;
+  onToolExecution?: (name: string, execution: ToolExecution) => void;
 }
 
 export async function runStructuredStage<T>(
@@ -77,6 +81,9 @@ export async function runStructuredStage<T>(
         tools,
         options.maxOutputTokens ?? input.config.review.maxOutputTokens,
         { stage, model, trigger, policyChars },
+        typeof options.reserveTokens === "function"
+          ? options.reserveTokens()
+          : options.reserveTokens,
       );
     } catch (error) {
       if (
@@ -152,7 +159,15 @@ export async function runStructuredStage<T>(
         toolCalls: completion.toolCalls,
       });
       for (const call of completion.toolCalls)
-        await inspectWithTool(input, call, messages, budget, state, context);
+        await inspectWithTool(
+          input,
+          call,
+          messages,
+          budget,
+          state,
+          context,
+          options.onToolExecution,
+        );
       trigger = "tool-results";
       continue;
     }
@@ -161,7 +176,10 @@ export async function runStructuredStage<T>(
       ? (options.validate?.(parsed.value) ?? [])
       : [parsed.error];
     if (parsed.success && failures.length === 0) return parsed.value;
-    if (canCompactSubmit(stage, messages)) {
+    if (
+      options.compactOnInvalid !== false &&
+      canCompactSubmit(stage, messages)
+    ) {
       state.notices.push(
         "The fat investigation conversation could not finish a valid assessment; the host started a compact DSL submit.",
       );
@@ -195,24 +213,19 @@ async function runCompactSubmit<T>(
       "Compact submit is only available after investigation or validation tools.",
     );
   }
-  const content = buildCompactSubmitContent(
-    options.content,
+  const requestedOutput =
+    options.maxOutputTokens ?? input.config.review.maxOutputTokens;
+  const reservedTokens =
+    typeof options.reserveTokens === "function"
+      ? options.reserveTokens()
+      : (options.reserveTokens ?? 0);
+  const messages = buildCompactSubmitMessages(
+    options,
     investigationMessages,
-    input.config.review,
+    budget,
+    requestedOutput,
+    reservedTokens,
   );
-  const context = createReviewContext();
-  const messages: ModelMessage[] = [
-    { role: "system", content: input.prompts[stage] },
-    {
-      role: "system",
-      content: [
-        reviewDslContract(stage),
-        "This is a compact submit turn. Output only REVIEW v1 DSL. Do not call tools. Do not use JSON.",
-        "The host already has seed patches and recorded inspections. Omit COVERAGE unless you must downgrade a file.",
-      ].join("\n\n"),
-    },
-    { role: "user", content: context.projectInput(content) },
-  ];
   let corrections = 0;
   let trigger: ReviewModelCallContext["trigger"] = "initial";
   while (true) {
@@ -221,34 +234,59 @@ async function runCompactSubmit<T>(
     const maxOutputTokens = budget.beginModel(
       messages,
       [],
-      options.maxOutputTokens ?? input.config.review.maxOutputTokens,
+      requestedOutput,
       { stage, model, trigger, policyChars: 0 },
+      reservedTokens,
     );
     input.onProgress?.({
       stage,
       message: "Writing the compact REVIEW v1 submit.",
     });
-    const completion = await budget.withinDeadline((signal) =>
-      input.model.complete({
-        stage,
-        model,
-        messages,
-        tools: [],
-        maxOutputTokens,
-        deadline: budget.deadline,
-        signal,
-        jsonMode: false,
-        ...(modelOverride?.reasoningEffort === undefined
-          ? {}
-          : { reasoningEffort: modelOverride.reasoningEffort }),
-      }),
-    );
+    let completion: ModelCompletion;
+    try {
+      completion = await budget.withinDeadline((signal) =>
+        input.model.complete({
+          stage,
+          model,
+          messages,
+          tools: [],
+          maxOutputTokens,
+          deadline: budget.deadline,
+          signal,
+          jsonMode: false,
+          ...(modelOverride?.reasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: modelOverride.reasoningEffort }),
+        }),
+      );
+    } catch (error) {
+      budget.recordModelFailure(error);
+      throw error;
+    }
     budget.recordCompletion(completion);
+    if (completion.outputTokens > maxOutputTokens)
+      throw new GusError(
+        "PROVIDER_PROTOCOL",
+        "The provider reported output beyond the requested compact completion limit.",
+      );
     if (completion.toolCalls.length > 0)
       throw new GusError(
         "PROVIDER_PROTOCOL",
         "The compact submit turn requested tools that are not available.",
       );
+    if (completion.finishReason !== "stop") {
+      corrections += 1;
+      requestCorrection(
+        messages,
+        completion.content,
+        [
+          "Compact completion was truncated, filtered, or unfinished. Return a complete output ending with END within the requested limit.",
+        ],
+        corrections,
+      );
+      trigger = "correction";
+      continue;
+    }
     const parsed = parseStageContent(completion.content, options.schema, stage);
     const failures = parsed.success
       ? (options.validate?.(parsed.value) ?? [])
@@ -257,6 +295,76 @@ async function runCompactSubmit<T>(
     corrections += 1;
     requestCorrection(messages, completion.content, failures, corrections);
     trigger = "correction";
+  }
+}
+
+function buildCompactSubmitMessages<T>(
+  options: StageInput<T>,
+  investigationMessages: readonly ModelMessage[],
+  budget: ReviewBudget,
+  requestedOutput: number,
+  reservedTokens: number,
+): ModelMessage[] {
+  const { input, stage } = options;
+  const systemMessages: ModelMessage[] = [
+    { role: "system", content: input.prompts[stage] },
+    {
+      role: "system",
+      content: [
+        stageOutputContract(options.schema, stage),
+        "This is a compact submit turn. Output only REVIEW v1 DSL. Do not call tools. Do not use JSON.",
+        "The host already has seed patches and recorded inspections. Omit COVERAGE unless you must downgrade a file.",
+      ].join("\n\n"),
+    },
+  ];
+  let maxSubmitContextChars = Math.min(
+    input.config.review.maxSubmitContextChars,
+    input.config.review.maxInputChars,
+  );
+  for (;;) {
+    const content = buildCompactSubmitContent(
+      options.content,
+      investigationMessages,
+      {
+        ...input.config.review,
+        maxSubmitContextChars,
+        maxSubmitSeedChars: Math.min(
+          input.config.review.maxSubmitSeedChars,
+          maxSubmitContextChars,
+        ),
+      },
+    );
+    const context = createReviewContext();
+    const messages = [
+      ...systemMessages,
+      { role: "user" as const, content: context.projectInput(content) },
+    ];
+    const serializedChars = JSON.stringify({ messages, tools: [] }).length;
+    const serializedBytes = Buffer.byteLength(
+      JSON.stringify({ messages, tools: [] }),
+      "utf8",
+    );
+    const availableBytes = budget.availableModelInputBytes(
+      requestedOutput,
+      reservedTokens,
+      messages.length,
+    );
+    if (
+      serializedChars <= input.config.review.maxInputChars &&
+      serializedBytes <= availableBytes
+    )
+      return messages;
+    const overflow = Math.max(
+      serializedChars - input.config.review.maxInputChars,
+      serializedBytes - availableBytes,
+    );
+    const reducedLimit = maxSubmitContextChars - overflow;
+    if (reducedLimit >= maxSubmitContextChars || reducedLimit <= 0)
+      throw new GusError(
+        "BUDGET_EXCEEDED",
+        "The compact submit cannot fit its host protocol within maxInputChars.",
+      );
+    maxSubmitContextChars = reducedLimit;
   }
 }
 
@@ -360,6 +468,7 @@ async function inspectWithTool(
   budget: ReviewBudget,
   state: ReviewEvidenceState,
   context: ReviewContext,
+  onToolExecution?: (name: string, execution: ToolExecution) => void,
 ): Promise<void> {
   budget.beginTool();
   if (!input.tools.definitions.some((tool) => tool.name === call.name))
@@ -403,6 +512,7 @@ async function inspectWithTool(
       "A repository tool response exceeded maxToolOutputChars. Its evidence was not silently clipped.",
     );
   for (const path of execution.inspectedPaths) state.inspectedPaths.add(path);
+  onToolExecution?.(call.name, execution);
   state.notices.push(...execution.warnings);
   messages.push({
     role: "tool",

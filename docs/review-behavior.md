@@ -19,6 +19,12 @@ an ID, and `{ "textRef": "..." }` refers to that definition. A stage receives
 every definition it needs. Repeated tool results can reuse definitions already
 present in that stage's conversation.
 
+When a stage outgrows its ordinary conversation, Gus builds a bounded structured
+handoff from complete records instead of slicing serialized text. The handoff
+names omitted sections explicitly and resolves every retained source reference,
+so partial JSON, dangling evidence IDs, and half-record candidates cannot
+masquerade as usable context.
+
 Reusing text does not merge evidence identities. Every evidence record retains
 its path, revision, SHA, coordinates, and truncation state, and the host keeps
 the full original text for local validation. Equal text at two revisions still
@@ -36,10 +42,14 @@ constraint for investigation, validation, reporting, or personality.
 
 Triage keeps its small JSON response. Investigation and validation can still use
 native read-only tools while collecting evidence; their final text uses
-`REVIEW v1`. If that fat conversation can no longer fit the review budget, the
-host starts a compact no-tool submit from the seed and recorded notes instead of
-aborting. Reporting and personality have no tools. A separate model and
-reasoning setting can be selected for each stage through `provider.stages`.
+`REVIEW v1`. If an investigation conversation can no longer fit the review
+budget, the host starts a compact no-tool submit from the seed and recorded
+whole-record notes instead of aborting. Validation receives a patch-free
+changed-file manifest, candidate assessment, and complete evidence metadata. It
+must independently reread pinned source covering every candidate citation before
+resolving that candidate. Reporting and personality have no tools. A separate
+model and reasoning setting can be selected for each stage through
+`provider.stages`.
 
 An assessment looks like this:
 
@@ -151,6 +161,14 @@ A confirmed finding names a realistic trigger, consequence, location, focused
 correction, and inspected evidence. Validation checks evidence references and
 current revision. A grep match or nearby test file alone is insufficient proof.
 
+A finding about an external package, framework, or tool contract must cite the
+defining contract, types, or implementation for the exact installed version.
+Call-site repetition, a lockfile entry, documentation for another version, or
+model memory does not establish that contract. If focused inspection cannot find
+the defining evidence, Gus records the uncertainty as a question instead of
+asserting a defect. This requirement does not weaken findings proved directly by
+repository-owned logic.
+
 Prior reviews require a trusted reviewer identity and valid Gus state. Stable
 identifiers carry continuity, while each prior finding gets a current status:
 still open, resolved, rejected, or unverified. Rebases and base changes need
@@ -166,12 +184,23 @@ The report identifies inspected, excluded, unreviewed, and partial files.
 Truncation and missing context remain visible. Size, risk, scorecards, and
 verdict are distinct from executed test results.
 
+Seeded diff prefixes count toward coverage only after they are verified against
+the pinned full diff. If validation reports a gap, the host issues a bounded
+correction that directs the model to retrieve the missing range with `read_diff`
+and follow pagination before submitting again. A gap that cannot be repaired
+remains explicit and keeps the review incomplete.
+
 The JSON artifact retains informational omissions, successful tool warnings,
 and optional voice failures in `review.diagnostics`. These notices do not fill
 the comment's Limitations section or the summary and personality prompts.
 Material assessment failures remain in `review.limitations` and in the comment;
 incomplete coverage still prevents a ready verdict. Existing review objects
 without diagnostics continue to display their supplied limitations.
+
+The validated assessment is frozen before report prose is generated. If that
+optional rewrite fails, Gus retains the findings, grades, candidate decisions,
+and verdict, and records the report failure as a diagnostic rather than replacing
+the review with an empty fallback.
 
 Comments include branch advice only when an action is needed; the snapshot
 retains all history notices. A completed review with no findings omits the empty

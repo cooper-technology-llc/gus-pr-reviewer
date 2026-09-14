@@ -1,6 +1,7 @@
 // Delivered pages, not mere tool calls, must prove complete inspection before a truncated diff can become fully reviewed.
 import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   configSchema,
   defaultConfig,
@@ -10,6 +11,7 @@ import type { RepositorySession } from "../review/review-ports.js";
 import { createGitFixture } from "./git-test-fixtures.js";
 import { createRepositorySession } from "./repository-session.js";
 import { createRepositoryTools } from "./repository-tools.js";
+import { sourceLines } from "./repository-reads.js";
 
 const directories: string[] = [];
 const sessions: RepositorySession[] = [];
@@ -22,14 +24,17 @@ afterEach(async () => {
   );
 });
 
-async function changedFile(config: GusConfig = defaultConfig) {
+async function changedFile(
+  config: GusConfig = defaultConfig,
+  changedLine = "new three",
+) {
   const fixture = await createGitFixture();
   directories.push(fixture.directory);
   await fixture.write("change.txt", "one\ntwo\nold three\nfour\n");
   await fixture.write("deleted.txt", "deleted source\n");
   await fixture.commit("base");
   await fixture.git("checkout", "-b", "child");
-  await fixture.write("change.txt", "one\ntwo\nnew three\nfour\n");
+  await fixture.write("change.txt", `one\ntwo\n${changedLine}\nfour\n`);
   await fixture.write("empty.txt", "");
   await fixture.git("rm", "deleted.txt");
   await fixture.commit("child");
@@ -171,7 +176,8 @@ describe("completed repository inspection", () => {
   });
 
   it("requires every patch row before completing paginated diff inspection", async () => {
-    const { tools } = await changedFile();
+    const { session, tools } = await changedFile();
+    session.files = session.files.map((file) => ({ ...file, patch: "" }));
     expect(
       (
         await tools.execute("read_diff", {
@@ -192,7 +198,85 @@ describe("completed repository inspection", () => {
     ).toEqual(["change.txt"]);
   });
 
-  it("does not retain coverage from a diff result whose serialized evidence could not fit", async () => {
+  it("combines the delivered seed prefix with the remaining patch rows", async () => {
+    const { session, tools } = await changedFile(
+      configSchema.parse({ review: { maxDiffCharsPerFile: 50 } }),
+    );
+    const seeded = session.files.find((file) => file.path === "change.txt");
+    expect(seeded?.truncated).toBe(true);
+    const prefixRows = sourceLines(seeded?.patch ?? "").length;
+    expect(prefixRows).toBeGreaterThan(0);
+    const remainder = await tools.execute("read_diff", {
+      path: "change.txt",
+      startLine: prefixRows + 1,
+      lineCount: 100,
+    });
+    expect(remainder.inspectedPaths).toEqual(["change.txt"]);
+  });
+
+  it("does not let a final diff page fill an undelivered middle gap", async () => {
+    const { session, tools } = await changedFile(
+      configSchema.parse({ review: { maxDiffCharsPerFile: 50 } }),
+    );
+    const diff = await session.readDiff("change.txt", 1, 100);
+    const tail = await tools.execute("read_diff", {
+      path: "change.txt",
+      startLine: diff.totalLines,
+      lineCount: 1,
+    });
+    expect(tail.inspectedPaths).toEqual([]);
+  });
+
+  it("does not credit a seed that differs from the pinned patch", async () => {
+    const { session, tools } = await changedFile(
+      configSchema.parse({ review: { maxDiffCharsPerFile: 50 } }),
+    );
+    session.files = session.files.map((file) => ({
+      ...file,
+      patch: file.patch.replace("diff --git", "different --git"),
+    }));
+    const tail = await tools.execute("read_diff", {
+      path: "change.txt",
+      startLine: 2,
+      lineCount: 100,
+    });
+    expect(tail.inspectedPaths).toEqual([]);
+  });
+
+  it("does not credit a single row whose serialized evidence cannot fit", async () => {
+    const changedLine = "x".repeat(7000);
+    const { session, tools } = await changedFile(
+      configSchema.parse({ review: { maxToolOutputChars: 6000 } }),
+      changedLine,
+    );
+    session.files = session.files.map((file) => ({ ...file, patch: "" }));
+    const diff = await session.readDiff("change.txt", 1, 100);
+    const rows = sourceLines(diff.text);
+    const oversizedRow = rows.indexOf(`+${changedLine}`) + 1;
+    expect(oversizedRow).toBeGreaterThan(0);
+    const rejected = await tools.execute("read_diff", {
+      path: "change.txt",
+      startLine: oversizedRow,
+      lineCount: 1,
+    });
+    expect(JSON.parse(rejected.content)).toMatchObject({
+      error: "OUTPUT_LIMIT",
+    });
+    expect(rejected.evidence).toEqual([]);
+    expect(rejected.inspectedPaths).toEqual([]);
+    for (let startLine = 1; startLine <= rows.length; startLine += 1) {
+      if (startLine === oversizedRow) continue;
+      const delivered = await tools.execute("read_diff", {
+        path: "change.txt",
+        startLine,
+        lineCount: 1,
+      });
+      expect(delivered.content).not.toContain("OUTPUT_LIMIT");
+      expect(delivered.inspectedPaths).toEqual([]);
+    }
+  });
+
+  it("shrinks many-hunk pages against the complete serialized response and advances to full coverage", async () => {
     const fixture = await createGitFixture();
     directories.push(fixture.directory);
     const lines = Array.from(
@@ -218,31 +302,47 @@ describe("completed repository inspection", () => {
       { config },
     );
     sessions.push(session);
+    session.files = session.files.map((file) => ({ ...file, patch: "" }));
     const tools = createRepositoryTools(session, config);
-    const clipped = await tools.execute("read_diff", {
-      path: "many-hunks.txt",
-      lineCount: 800,
+    const pageSchema = z.object({
+      patch: z.string(),
+      patchStartLine: z.number(),
+      nextLine: z.number().nullable(),
+      truncated: z.boolean(),
     });
-    expect(clipped.content).toContain("OUTPUT_LIMIT");
-    expect(clipped.inspectedPaths).toEqual([]);
-    const diff = await session.readDiff("many-hunks.txt", 1, 1000);
-    for (let startLine = 2; startLine <= diff.totalLines; startLine += 10) {
+    const deliveredRows: string[] = [];
+    let startLine = 1;
+    let pages = 0;
+    for (;;) {
       const page = await tools.execute("read_diff", {
         path: "many-hunks.txt",
         startLine,
-        lineCount: 10,
+        lineCount: 800,
       });
       expect(page.content).not.toContain("OUTPUT_LIMIT");
+      expect(JSON.stringify(page).length).toBeLessThanOrEqual(6000);
+      const payload = pageSchema.parse(JSON.parse(page.content));
+      expect(payload.patchStartLine).toBe(startLine);
+      deliveredRows.push(...sourceLines(payload.patch));
+      for (const evidence of page.evidence) {
+        expect(evidence.sha).toBe(
+          evidence.revision === "parent"
+            ? session.snapshot.comparisonBaseSha
+            : session.snapshot.headSha,
+        );
+      }
+      pages += 1;
+      if (payload.nextLine === null) {
+        expect(payload.truncated).toBe(false);
+        expect(page.inspectedPaths).toEqual(["many-hunks.txt"]);
+        break;
+      }
       expect(page.inspectedPaths).toEqual([]);
+      expect(payload.nextLine).toBeGreaterThan(startLine);
+      startLine = payload.nextLine;
     }
-    expect(
-      (
-        await tools.execute("read_diff", {
-          path: "many-hunks.txt",
-          startLine: 1,
-          lineCount: 1,
-        })
-      ).inspectedPaths,
-    ).toEqual(["many-hunks.txt"]);
+    expect(pages).toBeGreaterThan(1);
+    const diff = await session.readDiff("many-hunks.txt", 1, 1000);
+    expect(deliveredRows).toEqual(sourceLines(diff.text));
   });
 });

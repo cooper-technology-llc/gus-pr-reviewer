@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { GusError } from "../errors.js";
 import {
   buildCoverage,
@@ -10,6 +11,7 @@ import {
   validateCandidateResolutions,
 } from "./logic/adjudicate-review.js";
 import { addEvidence, seedDiffEvidence } from "./logic/review-evidence.js";
+import { buildValidationInput } from "./logic/build-validation-input.js";
 import { ReviewBudget } from "./review-budget.js";
 import type { ReviewInput } from "./review-ports.js";
 import type { ReviewResult } from "./review-schema.js";
@@ -48,6 +50,7 @@ export async function reviewChange(input: ReviewInput): Promise<ReviewResult> {
   };
   const result = initialReview(input, budget, prior);
   let assessmentApplied = false;
+  let attemptedCoverage: Analysis["coverage"] = [];
   try {
     if (prior.length > 100)
       throw new GusError(
@@ -64,7 +67,6 @@ export async function reviewChange(input: ReviewInput): Promise<ReviewResult> {
       input.repository.snapshot,
     );
     addEvidence(state.evidence, seededEvidence, input.repository.snapshot);
-    const seedIds = new Set(seededEvidence.map((entry) => entry.id));
     const seed = buildReviewSeed(input, seededEvidence, prior);
     const reviewSource: unknown = JSON.parse(seed);
     const triage = await runStructuredStage({
@@ -88,38 +90,72 @@ export async function reviewChange(input: ReviewInput): Promise<ReviewResult> {
       }),
       budget,
       state,
+      reserveTokens: () =>
+        Buffer.byteLength(
+          buildValidationInput({
+            reviewSource,
+            triage,
+            candidateAssessment: {
+              summary: triage.summary,
+              risk: triage.risk,
+              findings: [],
+              reconciliations: [],
+              questions: triage.questions,
+              architecture: null,
+              tests: null,
+              coverage: [],
+            },
+            evidence: state.evidence.values(),
+            blockingSeverity: input.config.review.blockingSeverity,
+          }),
+          "utf8",
+        ) +
+        input.config.review.maxOutputTokens * 3,
     });
+    const validationEvidence: ReviewResult["evidence"] = [];
     const validation = await runStructuredStage({
       input,
       stage: "validate",
       schema: validationSchema,
-      content: JSON.stringify({
-        reviewInput: reviewSource,
+      content: buildValidationInput({
+        reviewSource,
         triage,
         candidateAssessment: investigation,
-        additionalEvidence: [...state.evidence.values()].filter(
-          (entry) => !seedIds.has(entry.id),
-        ),
+        evidence: state.evidence.values(),
         blockingSeverity: input.config.review.blockingSeverity,
       }),
       budget,
       state,
-      validate: (analysis) => [
-        ...validateAnalysisEvidence(
-          analysis,
-          state.evidence,
-          input.repository.snapshot,
-          prior,
-          input.repository.files,
-          input.config,
-        ),
-        ...validateCandidateResolutions(
-          investigation,
-          analysis,
-          state.evidence,
-          input.repository.snapshot,
-        ),
-      ],
+      compactOnInvalid: false,
+      onToolExecution: (_name, execution) =>
+        validationEvidence.push(...execution.evidence),
+      validate: (analysis) => {
+        attemptedCoverage = analysis.coverage.filter(
+          (claim) => claim.status !== "inspected",
+        );
+        return [
+          ...validateAnalysisEvidence(
+            analysis,
+            state.evidence,
+            input.repository.snapshot,
+            prior,
+            input.repository.files,
+            input.config,
+          ),
+          ...validateCandidateResolutions(
+            investigation,
+            analysis,
+            state.evidence,
+            input.repository.snapshot,
+          ),
+          ...candidateEvidenceRepairErrors(
+            investigation,
+            state,
+            validationEvidence,
+          ),
+          ...coverageRepairErrors(analysis, input, state),
+        ];
+      },
     });
     for (const candidate of validation.candidateResolutions) {
       if (candidate.status === "unverified")
@@ -140,19 +176,32 @@ export async function reviewChange(input: ReviewInput): Promise<ReviewResult> {
     });
     result.summary = report.summary;
   } catch (error) {
-    result.verdict = "incomplete";
-    result.architecture = null;
-    result.tests = null;
-    if (!assessmentApplied) {
+    if (assessmentApplied) {
+      state.notices.push(
+        "Report prose was unavailable; the validated assessment summary was retained.",
+      );
+      state.notices.push(describeReviewFailure(error));
+    } else {
+      result.verdict = "incomplete";
+      result.architecture = null;
+      result.tests = null;
       result.coverage = buildCoverage(
         input.repository.files,
-        [],
+        attemptedCoverage,
         state.inspectedPaths,
       );
       result.summary =
         "The review stopped before a complete assessment. Coverage records seeded patches and repository inspections the host already collected.";
+      state.limitations.push(
+        ...result.coverage
+          .filter(
+            (entry) =>
+              entry.status === "partial" || entry.status === "unreviewed",
+          )
+          .map((entry) => `${entry.path}: ${entry.reason}`),
+        describeReviewFailure(error),
+      );
     }
-    state.limitations.push(describeReviewFailure(error));
   }
   result.evidence = [...state.evidence.values()];
   result.limitations = [
@@ -166,6 +215,60 @@ export async function reviewChange(input: ReviewInput): Promise<ReviewResult> {
   ];
   result.usage = budget.usage();
   return result;
+}
+
+function candidateEvidenceRepairErrors(
+  investigation: Analysis,
+  state: ReviewEvidenceState,
+  validationEvidence: ReviewResult["evidence"],
+): string[] {
+  const missing = new Map<string, ReviewResult["evidence"][number]>();
+  for (const finding of investigation.findings) {
+    for (const evidenceId of finding.evidenceIds) {
+      const evidence = state.evidence.get(evidenceId);
+      if (
+        evidence !== undefined &&
+        !validationEvidence.some((entry) => coversEvidence(entry, evidence))
+      )
+        missing.set(evidence.id, evidence);
+    }
+  }
+  return [...missing.values()].map((evidence) => {
+    const tool = evidence.kind === "diff" ? "read_diff" : "read_file";
+    return `${evidence.id}: independently retrieve ${evidence.path} at ${evidence.revision} lines ${evidence.startLine}-${evidence.endLine} with ${tool} or another pinned repository read that returns covering evidence before resolving the candidate.`;
+  });
+}
+
+function coversEvidence(
+  inspected: ReviewResult["evidence"][number],
+  expected: ReviewResult["evidence"][number],
+): boolean {
+  return (
+    inspected.path === expected.path &&
+    inspected.revision === expected.revision &&
+    inspected.sha === expected.sha &&
+    inspected.startLine <= expected.startLine &&
+    inspected.endLine >= expected.endLine
+  );
+}
+
+function coverageRepairErrors(
+  analysis: Analysis,
+  input: ReviewInput,
+  state: ReviewEvidenceState,
+): string[] {
+  return buildCoverage(
+    input.repository.files,
+    analysis.coverage,
+    state.inspectedPaths,
+  )
+    .filter(
+      (entry) => entry.status === "partial" || entry.status === "unreviewed",
+    )
+    .map(
+      (entry) =>
+        `${entry.path}: ${entry.reason} Before submitting validation, call read_diff with path ${JSON.stringify(entry.path)} and startLine 1, then follow nextLine until every missing diff row is covered. Inspect relevant source and reassess any explicit partial or unreviewed claim. If inspection is unavailable, keep the gap explicit; do not claim inspected coverage.`,
+    );
 }
 
 function initialReview(

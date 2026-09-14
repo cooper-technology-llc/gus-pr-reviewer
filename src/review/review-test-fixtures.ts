@@ -135,6 +135,8 @@ export function answerStage(
   request: ModelRequest,
   analysis = testAnalysis(),
 ): ModelCompletion {
+  const validationRead = validationEvidenceRead(request);
+  if (validationRead !== null) return validationRead;
   switch (request.stage) {
     case "triage":
       return jsonCompletion({
@@ -163,6 +165,33 @@ export function answerStage(
       return jsonCompletion({
         text: "That exported value is carrying a surprisingly large amount of responsibility.",
       });
+  }
+}
+
+export function validationEvidenceRead(
+  request: ModelRequest,
+): ModelCompletion | null {
+  if (!isValidationEvidenceCorrection(request)) return null;
+  return toolCompletion("validation-evidence-read", "read_file", "src/a.ts");
+}
+
+export function isValidationEvidenceCorrection(request: ModelRequest): boolean {
+  const latest = request.messages.at(-1);
+  if (request.stage !== "validate" || latest?.role !== "user") return false;
+  try {
+    const value: unknown = JSON.parse(latest.content);
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "protocolCorrection" in value &&
+      Array.isArray(value.protocolCorrection) &&
+      value.protocolCorrection.some(
+        (entry) =>
+          typeof entry === "string" && entry.includes("independently retrieve"),
+      )
+    );
+  } catch {
+    return false;
   }
 }
 

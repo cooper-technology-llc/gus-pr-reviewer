@@ -8,6 +8,7 @@ import {
   headEvidence,
   jsonCompletion,
   reviewTestInput,
+  validationEvidenceRead,
 } from "./review-test-fixtures.js";
 
 describe("DSL review submissions", () => {
@@ -16,6 +17,8 @@ describe("DSL review submissions", () => {
     input.config.personality.enabled = true;
     input.model = {
       complete: async (request) => {
+        const validationRead = validationEvidenceRead(request);
+        if (validationRead !== null) return validationRead;
         if (request.stage === "triage") return answerStage(request);
         const content =
           request.stage === "personality"
@@ -116,6 +119,8 @@ describe("DSL review submissions", () => {
     let investigationCalls = 0;
     input.model = {
       complete: async (request) => {
+        const validationRead = validationEvidenceRead(request);
+        if (validationRead !== null) return validationRead;
         if (request.stage === "investigate" && ++investigationCalls === 1) {
           return {
             ...jsonCompletion(null),
@@ -140,6 +145,8 @@ describe("DSL review submissions", () => {
     const input = reviewTestInput();
     input.model = {
       complete: async (request) => {
+        const validationRead = validationEvidenceRead(request);
+        if (validationRead !== null) return validationRead;
         if (request.stage === "investigate" || request.stage === "validate") {
           return {
             ...jsonCompletion(null),
@@ -164,6 +171,8 @@ describe("DSL review submissions", () => {
     const input = reviewTestInput();
     input.model = {
       complete: async (request) => {
+        const validationRead = validationEvidenceRead(request);
+        if (validationRead !== null) return validationRead;
         if (request.stage === "investigate" || request.stage === "validate") {
           return {
             ...jsonCompletion(null),
@@ -192,6 +201,8 @@ describe("DSL review submissions", () => {
     input.config.personality.enabled = true;
     input.model = {
       complete: async (request) => {
+        const validationRead = validationEvidenceRead(request);
+        if (validationRead !== null) return validationRead;
         if (request.stage === "investigate" || request.stage === "validate")
           return {
             ...jsonCompletion(null),

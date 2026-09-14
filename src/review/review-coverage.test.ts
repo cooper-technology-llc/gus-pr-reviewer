@@ -1,16 +1,192 @@
 // Saved diagnostics retain recoverable notices while comments expose material review gaps.
 import { describe, expect, it } from "vitest";
 import { formatReviewMarkdown } from "../reporting/format-review.js";
+import { configSchema } from "../config/config-schema.js";
+import { seedDiffEvidence } from "./logic/review-evidence.js";
 import { reviewChange } from "./review-change.js";
 import type { ModelRequest } from "./review-ports.js";
 import {
   answerStage,
   fileExecution,
   reviewTestInput,
+  testAnalysis,
+  testFinding,
   toolCompletion,
 } from "./review-test-fixtures.js";
 
 describe("review coverage and notices", () => {
+  it("keeps validation affordable after investigation accumulates unrelated source", async () => {
+    const input = reviewTestInput();
+    const source = input.repository.files[0];
+    if (!source) throw new Error("The test requires its source fixture.");
+    input.repository.files.push({
+      ...source,
+      path: "src/other.ts",
+      patch: `@@ -1 +1 @@\n-old\n+${"UNRELATED_SEED_".repeat(3500)}\n`,
+    });
+    let investigations = 0;
+    const stages: string[] = [];
+    let validationContent = "";
+    input.model.complete = async (request) => {
+      stages.push(request.stage);
+      if (request.stage === "investigate") {
+        investigations += 1;
+        return {
+          ...(investigations === 1
+            ? toolCompletion("inspect-other", "read_file", "src/other.ts")
+            : answerStage(request)),
+          inputTokens: 60_000,
+        };
+      }
+      if (request.stage === "validate")
+        validationContent = JSON.stringify(request.messages);
+      return answerStage(request);
+    };
+    input.tools.execute = async () =>
+      fileExecution(
+        "unreferenced-source",
+        "src/other.ts",
+        "DISCOVERY_".repeat(2500),
+      );
+
+    const result = await reviewChange(input);
+
+    expect(stages).toContain("validate");
+    expect(stages).toContain("report");
+    expect(result.verdict).toBe("ready");
+    expect(validationContent).toContain("src/other.ts");
+    expect(validationContent).not.toContain("UNRELATED_SEED_");
+    expect(validationContent).not.toContain("DISCOVERY_");
+  });
+
+  it("preserves validation budget when a near-limit candidate cites large seed evidence", async () => {
+    const input = reviewTestInput({
+      config: configSchema.parse({
+        review: {
+          maxInputChars: 100_000,
+          maxTotalTokens: 140_000,
+          maxSubmitContextChars: 8_000,
+          maxSubmitSeedChars: 6_000,
+        },
+        personality: { enabled: false },
+      }),
+    });
+    const source = input.repository.files[0];
+    if (!source) throw new Error("The test requires its source fixture.");
+    input.repository.files.push({
+      ...source,
+      path: "src/large.ts",
+      patch: `@@ -1 +1 @@\n-old\n+${"LARGE_SEED_".repeat(1800)}\n`,
+    });
+    const largeHeadEvidence = seedDiffEvidence(
+      input.repository.files,
+      input.repository.snapshot,
+    ).find(
+      (entry) => entry.path === "src/large.ts" && entry.revision === "head",
+    );
+    if (!largeHeadEvidence)
+      throw new Error("The test requires large head seed evidence.");
+    const analysis = testAnalysis([
+      testFinding({
+        path: "src/large.ts",
+        line: 1,
+        evidenceIds: [largeHeadEvidence.id],
+      }),
+    ]);
+    let investigationCalls = 0;
+    let validationCalls = 0;
+    const stages: string[] = [];
+    input.tools.definitions.push({
+      name: "read_diff",
+      description: "Read a pinned diff range.",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+    });
+    input.model.complete = async (request) => {
+      stages.push(request.stage);
+      if (request.stage === "investigate") {
+        investigationCalls += 1;
+        if (investigationCalls === 1)
+          return {
+            ...toolCompletion("inspect-large", "read_file", "src/large.ts"),
+            inputTokens: 70_000,
+          };
+      }
+      if (request.stage === "validate" && ++validationCalls === 2)
+        return toolCompletion("validate-large", "read_diff", "src/large.ts");
+      return answerStage(request, analysis);
+    };
+    input.tools.execute = async () => ({
+      ...fileExecution(
+        "large-source",
+        "src/large.ts",
+        "export const large = true;",
+      ),
+      content: "FAT_DISCOVERY_".repeat(2000),
+    });
+
+    const result = await reviewChange(input);
+
+    expect(stages).toContain("validate");
+    expect(stages).toContain("report");
+    expect(validationCalls).toBe(3);
+    expect(result.verdict).toBe("changes-requested");
+    expect(result.limitations).toEqual([]);
+    expect(result.diagnostics).toContain(
+      "Investigation context no longer fit the review budget; the host rebuilt a compact DSL submit.",
+    );
+  });
+
+  it("lets validation repair missing patch coverage after an early assessment", async () => {
+    const input = reviewTestInput();
+    input.repository.files = input.repository.files.map((file) => ({
+      ...file,
+      truncated: true,
+    }));
+    let validations = 0;
+    let repairInstructions = "";
+    input.tools.definitions.push({
+      name: "read_diff",
+      description: "Read missing pinned diff rows.",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+    });
+    input.model.complete = async (request) => {
+      if (request.stage === "validate" && ++validations === 2) {
+        repairInstructions = JSON.stringify(request.messages);
+        return toolCompletion("repair-patch", "read_diff", "src/a.ts");
+      }
+      return answerStage(request);
+    };
+
+    const result = await reviewChange(input);
+
+    expect(validations).toBe(3);
+    expect(repairInstructions).toContain("read_diff");
+    expect(repairInstructions).toContain("src/a.ts");
+    expect(result.verdict).toBe("ready");
+    expect(result.coverage[0]?.status).toBe("inspected");
+  });
+
+  it("retains a validated assessment when report prose fails", async () => {
+    const input = reviewTestInput();
+    input.model.complete = async (request) => {
+      if (request.stage === "report") throw new Error("Prose unavailable.");
+      return answerStage(request);
+    };
+
+    const result = await reviewChange(input);
+
+    expect(result).toMatchObject({
+      verdict: "ready",
+      summary: testAnalysis().summary,
+      architecture: { grade: "A" },
+      tests: { grade: "B" },
+      limitations: [],
+    });
+    expect(result.diagnostics).toContain(
+      "Report prose was unavailable; the validated assessment summary was retained.",
+    );
+  });
+
   it("preserves intentional exclusion notices without treating excluded files as incomplete", async () => {
     const input = reviewTestInput();
     const source = input.repository.files[0];

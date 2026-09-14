@@ -10,7 +10,7 @@ He reviews GitHub pull requests or committed local branches, keeps findings tied
 to the revisions he inspected, and separates branch maintenance advice from code
 defects. Every review prompt can be extended or completely replaced.
 
-Version **0.1.6** includes the CLI and a runtime you can commit to your repository.
+Version **0.1.7** includes the CLI and a runtime you can commit to your repository.
 The earlier `0.0.1-alpha.0` package contains prompts only.
 
 Review assessments use a compact text DSL that Gus parses and validates locally
@@ -22,7 +22,7 @@ do not use provider JSON mode. See the [response protocol](docs/review-behavior.
 Run once from the repository where you want Gus:
 
 ```sh
-npx --yes gus-pr-reviewer@0.1.6 init
+npx --yes gus-pr-reviewer@0.1.7 init
 ```
 
 Setup walks you through the model provider, model, API-key environment variable,
@@ -72,7 +72,7 @@ outside their scope.
 For local CLI use, you can also install a pinned version:
 
 ```sh
-npm install --save-dev --save-exact gus-pr-reviewer@0.1.6
+npm install --save-dev --save-exact gus-pr-reviewer@0.1.7
 npx gus --help
 ```
 
@@ -141,6 +141,15 @@ findings, and reports concrete triggers, consequences, and corrections. Reviews
 include the inspected head/base, coverage, supplied check results, limits, usage,
 and a risk/size assessment. Findings carry stable identifiers for later review
 rounds; a prior accusation needs current evidence to remain open.
+
+Large reviews preserve complete evidence records when compressing stage context,
+then validate candidates against a patch-free manifest and freshly reread pinned
+source covering every citation.
+If validation discovers an unread diff range, Gus asks for that range with
+`read_diff` before finalizing coverage. A prose-report failure cannot erase the
+validated technical assessment. Claims about an external API require defining
+evidence for the exact installed version; indirect usage or model memory alone
+becomes a focused question, not a defect.
 
 His reaction is written after the technical result is finalized. For example,
 Gus might say, “That retry loop was committed to the bit.” Humor cannot add a

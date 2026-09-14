@@ -4,6 +4,39 @@ import { configSchema } from "../config/config-schema.js";
 import { ReviewBudget } from "./review-budget.js";
 
 describe("ReviewBudget", () => {
+  it("preserves a downstream reserve without spending a model turn", () => {
+    const budget = new ReviewBudget(
+      configSchema.parse({ review: { maxTotalTokens: 5000 } }),
+      () => 0,
+    );
+    expect(() => budget.beginModel([], [], 2048, undefined, 4000)).toThrowError(
+      expect.objectContaining({ code: "BUDGET_EXCEEDED" }),
+    );
+    expect(budget.usage().requests).toBe(0);
+    expect(budget.beginModel([], [], 2048)).toBe(2048);
+  });
+
+  it("reports the serialized input allowance left after output and downstream reserves", () => {
+    const budget = new ReviewBudget(
+      configSchema.parse({ review: { maxTotalTokens: 5000 } }),
+      () => 0,
+    );
+
+    expect(budget.availableModelInputBytes(2048, 3000, 3)).toBe(672);
+  });
+
+  it("refuses a budget-clipped tiny completion but permits an explicitly small request", () => {
+    const budget = new ReviewBudget(
+      configSchema.parse({ review: { maxTotalTokens: 500 } }),
+      () => 0,
+    );
+    expect(() => budget.beginModel([], [], 2048)).toThrowError(
+      expect.objectContaining({ code: "BUDGET_EXCEEDED" }),
+    );
+    expect(budget.usage().requests).toBe(0);
+    expect(budget.beginModel([], [], 100)).toBe(100);
+  });
+
   it("refuses context overflow before spending a provider request", () => {
     const budget = new ReviewBudget(
       configSchema.parse({ review: { maxInputChars: 10 } }),
