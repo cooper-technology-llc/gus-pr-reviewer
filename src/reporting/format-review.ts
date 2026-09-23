@@ -5,6 +5,8 @@ import type {
   ReviewFindingExcerpt,
   ReviewResult,
 } from "../review/review-schema.js";
+import { uniqueExcerpts } from "../review/logic/unique-excerpts.js";
+import { formatInlineProse, formatProse } from "./logic/format-prose.js";
 import {
   blobUrl,
   escapeCode,
@@ -46,10 +48,10 @@ export function formatReviewMarkdown(
     sections.push(formatCommentFinding(finding, review, subject));
   const previous = formatPreviousFindings(review);
   if (previous) sections.push(previous);
-  sections.push(escapeMarkdown(firstSentences(review.summary)));
+  sections.push(formatProse(firstSentences(review.summary)));
   const take = review.personality.replace(/\s+/g, " ").trim();
   if (config.personality.enabled && take)
-    sections.push(`> ${escapeMarkdown(take)}`);
+    sections.push(`> ${formatInlineProse(take)}`);
   const linksLine = formatLinksLine(links);
   if (linksLine) sections.push(linksLine);
   return addHiddenReviewComment(sections.join("\n\n"), stateFromReview(review));
@@ -65,11 +67,11 @@ function formatCommentFinding(
   const location = `\`${escapeCode(finding.path)}:${finding.line}\``;
   const url = blobUrl(subject, sha, finding.path, finding.line);
   const lines = [
-    `#### ${finding.severity.toUpperCase()} · ${escapeMarkdown(finding.title)}`,
+    `#### ${finding.severity.toUpperCase()} · ${formatInlineProse(finding.title)}`,
     `${url ? `[${location}](${safeUrl(url)})` : location} · ${finding.disposition}`,
-    `**Trigger:** ${escapeMarkdown(finding.trigger)}`,
-    `**Impact:** ${escapeMarkdown(finding.impact)}`,
-    `**Fix:** ${escapeMarkdown(finding.suggestion)}`,
+    `**Trigger:** ${formatProse(finding.trigger)}`,
+    `**Impact:** ${formatProse(finding.impact)}`,
+    `**Fix:** ${formatProse(finding.suggestion)}`,
   ];
   const excerpts = findingExcerpts(finding, review);
   if (excerpts.length > 0) lines.push(formatEvidenceDetails(excerpts, subject));
@@ -81,8 +83,8 @@ function findingExcerpts(
   finding: ReviewFinding,
   review: ReviewResult,
 ): ReviewFindingExcerpt[] {
-  if (finding.excerpts.length > 0) return finding.excerpts;
-  return finding.evidenceIds.flatMap((id) => {
+  if (finding.excerpts.length > 0) return uniqueExcerpts(finding.excerpts);
+  const cited = finding.evidenceIds.flatMap((id) => {
     const evidence = review.evidence.find((entry) => entry.id === id);
     if (!evidence || !evidence.text.trim()) return [];
     return [
@@ -101,6 +103,7 @@ function findingExcerpts(
       },
     ];
   });
+  return uniqueExcerpts(cited);
 }
 
 function formatEvidenceDetails(
@@ -141,7 +144,7 @@ function formatPreviousFindings(review: ReviewResult): string | null {
   if (review.reconciliations.length === 0) return null;
   const rows = review.reconciliations.map(
     (resolution) =>
-      `- \`${escapeCode(resolution.id)}\`: **${resolution.status}** — ${escapeMarkdown(firstSentences(resolution.reason, 1))}`,
+      `- \`${escapeCode(resolution.id)}\`: **${resolution.status}** — ${formatInlineProse(firstSentences(resolution.reason, 1))}`,
   );
   return [
     `<details><summary>Previous findings (${review.reconciliations.length})</summary>`,
@@ -175,15 +178,15 @@ export function formatFindingMarkdown(
 ): string {
   const location = `\`${escapeCode(finding.path)}:${finding.line} (${finding.side})\``;
   const lines = [
-    `#### ${finding.severity.toUpperCase()} · ${escapeMarkdown(finding.title)}`,
+    `#### ${finding.severity.toUpperCase()} · ${formatInlineProse(finding.title)}`,
     "",
     `${location} · **${finding.disposition}** · \`${escapeCode(finding.id)}\``,
     "",
-    `**Trigger:** ${escapeMarkdown(finding.trigger)}`,
+    `**Trigger:** ${formatProse(finding.trigger)}`,
     "",
-    `**Impact:** ${escapeMarkdown(finding.impact)}`,
+    `**Impact:** ${formatProse(finding.impact)}`,
     "",
-    `**Suggested change:** ${escapeMarkdown(finding.suggestion)}`,
+    `**Suggested change:** ${formatProse(finding.suggestion)}`,
     "",
     `**Evidence:** ${finding.evidenceIds.map((id) => formatEvidenceLink(id, review, subject)).join(", ")}`,
     "",

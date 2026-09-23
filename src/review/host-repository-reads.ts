@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { z } from "zod";
 
 import { GusError } from "../errors.js";
+import { uniqueExcerpts } from "./logic/unique-excerpts.js";
 import { ReviewBudget } from "./review-budget.js";
 import type { ReviewInput, ToolExecution } from "./review-ports.js";
 import type {
@@ -93,12 +94,12 @@ export async function attachFindingExcerpts(
           `Evidence ${evidenceId} could not be re-read for its excerpt; the finding keeps its evidence ID.`,
         );
         if (stopsHostReads(error)) {
-          finding.excerpts = excerpts;
+          finding.excerpts = uniqueExcerpts(excerpts);
           return;
         }
       }
     }
-    finding.excerpts = excerpts;
+    finding.excerpts = uniqueExcerpts(excerpts);
   }
 }
 
