@@ -2,10 +2,19 @@
 import { describe, expect, it } from "vitest";
 
 import { configSchema } from "../config/config-schema.js";
-import { excerptRange } from "./host-repository-reads.js";
+import {
+  attachFindingExcerpts,
+  excerptRange,
+} from "./host-repository-reads.js";
+import { ReviewBudget } from "./review-budget.js";
 import { reviewChange } from "./review-change.js";
 import type { ToolExecution } from "./review-ports.js";
-import type { ChangedFile, PriorReview } from "./review-schema.js";
+import type {
+  ChangedFile,
+  PriorReview,
+  ReviewEvidence,
+} from "./review-schema.js";
+import type { ReviewEvidenceState } from "./structured-stage.js";
 import {
   answerStage,
   fileExecution,
@@ -160,6 +169,40 @@ describe("finding excerpts", () => {
       },
     ]);
     expect(result.usage.toolCalls).toBe(0);
+  });
+
+  it("attaches one excerpt when a diff record and a file record cite the same range", async () => {
+    const input = reviewTestInput();
+    input.tools.execute = async () =>
+      fileExecution("reread", "src/a.ts", "export const value = 2;");
+    const diffRecord = headEvidence();
+    const fileRecord: ReviewEvidence = {
+      ...diffRecord,
+      id: "file:src/a.ts:1",
+      kind: "file",
+    };
+    const state: ReviewEvidenceState = {
+      evidence: new Map([
+        [diffRecord.id, diffRecord],
+        [fileRecord.id, fileRecord],
+      ]),
+      inspectedPaths: new Set(),
+      limitations: [],
+      notices: [],
+    };
+    const finding = testFinding({
+      evidenceIds: [diffRecord.id, fileRecord.id],
+    });
+
+    await attachFindingExcerpts(
+      [finding],
+      input,
+      new ReviewBudget(input.config, () => 0),
+      state,
+    );
+
+    expect(finding.excerpts).toHaveLength(1);
+    expect(finding.excerpts[0]?.evidenceId).toBe(diffRecord.id);
   });
 
   it("keeps the finding and verdict when a re-read fails", async () => {

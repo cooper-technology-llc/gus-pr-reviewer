@@ -1,6 +1,9 @@
 import type { ReviewSubject } from "../../review/review-ports.js";
 
-/** Escapes model or user text so it renders literally and cannot mention anyone. */
+/**
+ * Escapes text so it renders literally and cannot mention anyone. Use it only where a value
+ * lands in link text, a table cell, or the configured name; prose goes through formatProse.
+ */
 export function escapeMarkdown(value: string): string {
   return value
     .replace(/&/g, "&amp;")

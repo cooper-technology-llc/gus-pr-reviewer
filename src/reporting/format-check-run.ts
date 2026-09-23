@@ -1,5 +1,6 @@
 import type { ReviewFinding, ReviewResult } from "../review/review-schema.js";
 import { formatModelUsage } from "./logic/format-model-usage.js";
+import { formatInlineProse, formatProse } from "./logic/format-prose.js";
 import {
   escapeCode,
   escapeMarkdown,
@@ -50,7 +51,7 @@ export function formatCheckRunOutput(
 }
 
 function formatSummary(review: ReviewResult, links: ReviewLinks): string {
-  const lines = [escapeMarkdown(review.summary), "", ...reviewNotes(review)];
+  const lines = [formatProse(review.summary), "", ...reviewNotes(review)];
   if (links.artifactUrl)
     lines.push("", `[Evidence JSON](${safeUrl(links.artifactUrl)})`);
   return lines.join("\n").trim();
@@ -90,11 +91,11 @@ function formatVerdict(review: ReviewResult): string {
   ];
   if (review.architecture)
     lines.push(
-      `- Architecture: **${review.architecture.grade}** — ${escapeMarkdown(review.architecture.reason)}`,
+      `- Architecture: **${review.architecture.grade}** — ${formatInlineProse(review.architecture.reason)}`,
     );
   if (review.tests)
     lines.push(
-      `- Tests: **${review.tests.grade}** — ${escapeMarkdown(review.tests.reason)}`,
+      `- Tests: **${review.tests.grade}** — ${formatInlineProse(review.tests.reason)}`,
     );
   return lines.join("\n");
 }
@@ -106,7 +107,7 @@ function formatFindingList(review: ReviewResult): string {
     "",
     ...review.findings.map(
       (finding) =>
-        `- **${finding.severity.toUpperCase()}** · ${escapeMarkdown(finding.title)} · \`${escapeCode(finding.path)}:${finding.line}\` · ${finding.disposition} · \`${escapeCode(finding.id)}\``,
+        `- **${finding.severity.toUpperCase()}** · ${formatInlineProse(finding.title)} · \`${escapeCode(finding.path)}:${finding.line}\` · ${finding.disposition} · \`${escapeCode(finding.id)}\``,
     ),
   ].join("\n");
 }
@@ -154,7 +155,7 @@ function formatChecks(review: ReviewResult): string {
         ? check.status
         : `inconclusive (ran on \`${escapeCode(shortSha(check.headSha))}\`)`;
     lines.push(
-      `- **${escapeMarkdown(check.name)}: ${status}** — ${escapeMarkdown(check.details)}${check.url ? ` [Evidence](${safeUrl(check.url)})` : ""}`,
+      `- **${escapeMarkdown(check.name)}: ${status}** — ${formatInlineProse(check.details)}${check.url ? ` [Evidence](${safeUrl(check.url)})` : ""}`,
     );
   }
   return lines.join("\n");
@@ -165,7 +166,7 @@ function formatList(title: string, items: string[]): string {
   return [
     `## ${title}`,
     "",
-    ...items.map((item) => `- ${escapeMarkdown(item)}`),
+    ...items.map((item) => `- ${formatInlineProse(item)}`),
   ].join("\n");
 }
 
@@ -176,7 +177,7 @@ function formatReconciliations(review: ReviewResult): string {
     "",
     ...review.reconciliations.map(
       (resolution) =>
-        `- \`${escapeCode(resolution.id)}\`: **${resolution.status}** — ${escapeMarkdown(resolution.reason)}${resolution.evidenceIds.length ? ` Evidence: ${resolution.evidenceIds.map((id) => `\`${escapeCode(id)}\``).join(", ")}.` : ""}`,
+        `- \`${escapeCode(resolution.id)}\`: **${resolution.status}** — ${formatInlineProse(resolution.reason)}${resolution.evidenceIds.length ? ` Evidence: ${resolution.evidenceIds.map((id) => `\`${escapeCode(id)}\``).join(", ")}.` : ""}`,
     ),
   ].join("\n");
 }
@@ -191,7 +192,7 @@ function formatBranchAdvice(review: ReviewResult): string {
     "",
     ...advice.map(
       (advisory) =>
-        `- ${escapeMarkdown(advisory.message)} ${escapeMarkdown(advisory.evidence)} Action: ${advisory.action}.`,
+        `- ${formatInlineProse(advisory.message)} ${formatInlineProse(advisory.evidence)} Action: ${advisory.action}.`,
     ),
   ].join("\n");
 }

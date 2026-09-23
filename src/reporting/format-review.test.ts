@@ -339,6 +339,39 @@ describe("review comment", () => {
     expect(report).not.toContain("/blob/local-merge-tree/");
   });
 
+  it("renders finding prose byte-for-byte instead of escaping it", () => {
+    const review = makeReview();
+    const trigger =
+      "A job runs `<command checkout>` against the _snake_case_ workspace.";
+    review.findings = [makeFinding({ trigger })];
+
+    const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
+
+    expect(report).toContain(`**Trigger:** ${trigger}`);
+    expect(report).not.toContain("&lt;");
+    expect(report).not.toContain("\\`");
+  });
+
+  it("renders a range cited by two evidence IDs once", () => {
+    const review = makeReview();
+    const excerpt = makeFinding().excerpts[0];
+    if (!excerpt) throw new Error("The fixture requires an excerpt.");
+    review.findings = [
+      makeFinding({
+        evidenceIds: ["diff-1", "file-1"],
+        excerpts: [
+          { ...excerpt, evidenceId: "diff-1" },
+          { ...excerpt, evidenceId: "file-1" },
+        ],
+      }),
+    ];
+
+    const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
+
+    expect(report).toContain("<details><summary>Evidence (1)</summary>");
+    expect(report.split("export async function updateWidget")).toHaveLength(2);
+  });
+
   it("uses a fence that excerpt backticks cannot close", () => {
     const review = makeReview();
     review.findings = [

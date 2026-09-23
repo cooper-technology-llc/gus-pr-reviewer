@@ -1,4 +1,5 @@
 import type { ReviewResult } from "../../review/review-schema.js";
+import { formatInlineProse } from "./format-prose.js";
 import { escapeMarkdown, plural } from "./markdown-text.js";
 
 /** Links the comment points to; each is omitted when the run could not determine it. */
@@ -45,7 +46,7 @@ export function reviewNotes(review: ReviewResult): string[] {
   const [first, ...rest] = review.limitations;
   if (first !== undefined)
     notes.push(
-      `Limits: ${escapeMarkdown(first)}${rest.length > 0 ? ` and ${rest.length} more` : ""}`,
+      `Limits: ${formatInlineProse(first)}${rest.length > 0 ? ` and ${rest.length} more` : ""}`,
     );
   if (review.questions.length > 0)
     notes.push(
