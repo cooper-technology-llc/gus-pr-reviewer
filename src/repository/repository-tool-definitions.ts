@@ -34,7 +34,7 @@ export const searchArguments = z.strictObject({
   fileIndex: z.number().int().nonnegative().default(0),
   startLine: positiveLine.default(1),
   maxFiles: positiveLine.max(100).default(20),
-  maxMatches: positiveLine.max(100).default(30),
+  maxMatches: positiveLine.max(50).default(30),
 });
 export const diffArguments = z.strictObject({
   path: pathSchema,
@@ -61,7 +61,7 @@ export const repositoryToolDefinitions: ModelTool[] = [
   ),
   definition(
     "search",
-    "Search for literal text in pinned tracked source, never regular expressions or shell commands. Continue using the returned fileIndex/startLine cursor; a partial scan is not proof of absence.",
+    "Search for literal text in pinned tracked source, never regular expressions or shell commands. Each hit is one matched line only (path, line, and up to 200 characters of that line; no surrounding context) — call read_file at that line for context. Returns at most 50 hits per call plus a moreHits count when more were found. Continue using the returned fileIndex/startLine cursor; a partial scan is not proof of absence.",
     searchArguments,
   ),
   definition(

@@ -131,7 +131,7 @@ describe("reviewChange", () => {
         },
       }),
     );
-    expect(calls).toBe(3);
+    expect(calls).toBe(4);
     expect(result).toMatchObject({
       verdict: "incomplete",
       findings: [],
@@ -234,7 +234,7 @@ describe("reviewChange", () => {
       personality: "",
     });
     expect(result.findings).toHaveLength(1);
-    expect(voiceRequests).toHaveLength(3);
+    expect(voiceRequests).toHaveLength(4);
     expect(voiceRequests[0]?.messages[0]?.content).toBe(
       input.prompts.personality,
     );

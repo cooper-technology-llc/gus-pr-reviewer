@@ -157,9 +157,10 @@ async function readFileTool(
   const pages = fitSourcePages([file], (candidates) => {
     const candidate = candidates[0] ?? file;
     const { payload, evidence } = filePage(candidate);
-    return (
-      toolResult(payload, [evidence], [candidate.path], [], maxChars)
-        .content === JSON.stringify(payload)
+    return isUnclipped(
+      toolResult(payload, [evidence], [candidate.path], [], maxChars),
+      payload,
+      1,
     );
   });
   const bounded = pages?.[0] ?? file;
@@ -168,7 +169,7 @@ async function readFileTool(
   result.inspectedPaths = [];
   if (
     pages !== null &&
-    result.content === JSON.stringify(payload) &&
+    isUnclipped(result, payload, 1) &&
     recordSourceCoverage(repository, bounded, coverage)
   )
     result.inspectedPaths.push(file.path);
@@ -208,9 +209,10 @@ async function readFilesTool(
   const reservedPaths = [...new Set(files.map((file) => file.path))];
   const pages = fitSourcePages(files, (candidates) => {
     const { payload, evidence } = filePages(candidates, warnings);
-    return (
-      toolResult(payload, evidence, reservedPaths, warnings, maxChars)
-        .content === JSON.stringify(payload)
+    return isUnclipped(
+      toolResult(payload, evidence, reservedPaths, warnings, maxChars),
+      payload,
+      candidates.length,
     );
   });
   const { payload, evidence } = filePages(pages ?? files, warnings);
@@ -222,7 +224,7 @@ async function readFilesTool(
     maxChars,
   );
   execution.inspectedPaths = [];
-  if (pages !== null && execution.content === JSON.stringify(payload)) {
+  if (pages !== null && isUnclipped(execution, payload, pages.length)) {
     for (const file of pages) {
       if (
         recordSourceCoverage(repository, file, coverage) &&
@@ -333,7 +335,7 @@ async function readDiffTool(
     };
     const result = toolResult(payload, evidence, [file.path], [], maxChars);
     result.inspectedPaths = [];
-    if (result.content === JSON.stringify(payload)) {
+    if (isUnclipped(result, payload, evidence.length)) {
       if (
         coverage.record({
           path: file.path,
@@ -349,6 +351,18 @@ async function readDiffTool(
     if (selected.length <= 1) return result;
     selected = selected.slice(0, Math.max(1, Math.floor(selected.length / 2)));
   }
+}
+
+/** True only when a tool result carries the exact requested content and its full evidence, none of it dropped to fit the output budget. */
+function isUnclipped(
+  result: ToolExecution,
+  payload: unknown,
+  expectedEvidenceCount: number,
+): boolean {
+  return (
+    result.content === JSON.stringify(payload) &&
+    result.evidence.length === expectedEvidenceCount
+  );
 }
 
 function recordSourceCoverage(

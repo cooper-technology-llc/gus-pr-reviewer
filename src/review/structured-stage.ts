@@ -17,6 +17,7 @@ import {
   unwrapReviewOutput,
 } from "./logic/review-dsl-lexer.js";
 import { parseReviewDsl } from "./logic/review-dsl-parser.js";
+import { repairReviewDsl } from "./logic/review-dsl-repair.js";
 import { addEvidence } from "./logic/review-evidence.js";
 import { ReviewBudget } from "./review-budget.js";
 import type {
@@ -48,8 +49,6 @@ interface StageInput<T> {
   validate?: (result: T) => string[];
   maxOutputTokens?: number;
   reserveTokens?: number | (() => number);
-  compactOnInvalid?: boolean;
-  onToolExecution?: (name: string, execution: ToolExecution) => void;
 }
 
 export async function runStructuredStage<T>(
@@ -159,27 +158,21 @@ export async function runStructuredStage<T>(
         toolCalls: completion.toolCalls,
       });
       for (const call of completion.toolCalls)
-        await inspectWithTool(
-          input,
-          call,
-          messages,
-          budget,
-          state,
-          context,
-          options.onToolExecution,
-        );
+        await inspectWithTool(input, call, messages, budget, state, context);
       trigger = "tool-results";
       continue;
     }
-    const parsed = parseStageContent(completion.content, options.schema, stage);
+    const parsed = parseStageContent(
+      completion.content,
+      options.schema,
+      stage,
+      state,
+    );
     const failures = parsed.success
       ? (options.validate?.(parsed.value) ?? [])
       : [parsed.error];
     if (parsed.success && failures.length === 0) return parsed.value;
-    if (
-      options.compactOnInvalid !== false &&
-      canCompactSubmit(stage, messages)
-    ) {
+    if (canCompactSubmit(stage, messages)) {
       state.notices.push(
         "The fat investigation conversation could not finish a valid assessment; the host started a compact DSL submit.",
       );
@@ -287,7 +280,12 @@ async function runCompactSubmit<T>(
       trigger = "correction";
       continue;
     }
-    const parsed = parseStageContent(completion.content, options.schema, stage);
+    const parsed = parseStageContent(
+      completion.content,
+      options.schema,
+      stage,
+      options.state,
+    );
     const failures = parsed.success
       ? (options.validate?.(parsed.value) ?? [])
       : [parsed.error];
@@ -387,7 +385,7 @@ function stageOutputContract<T>(
   }
   if (stage === "validate")
     contract.push(
-      "Give one CANDIDATE record for every investigation finding ID. Confirmed candidates must remain findings; rejected candidates need current evidence and a reason; unverified candidates keep the review incomplete. Never silently drop an investigation candidate.",
+      "Give one CANDIDATE record for every investigation finding ID. Confirmed candidates must remain findings; rejected candidates need current evidence and a reason; unverified candidates are reported as open limitations. Never silently drop an investigation candidate. The host re-reads every cited evidence range and pages truncated patches itself; read only what your judgment needs.",
     );
   if (stage === "report")
     contract.push(
@@ -404,6 +402,7 @@ function parseStageContent<T>(
   content: string,
   schema: z.ZodType<T>,
   stage: ReviewStage,
+  state: ReviewEvidenceState,
 ): { success: true; value: T } | { success: false; error: string } {
   let raw: unknown;
   try {
@@ -411,7 +410,7 @@ function parseStageContent<T>(
     raw =
       stage === "triage" || document.startsWith("{") || document.startsWith("[")
         ? JSON.parse(document)
-        : parseReviewDsl(document, stage);
+        : parseRepairedReviewDsl(document, stage, state);
   } catch (error) {
     return {
       success: false,
@@ -439,26 +438,42 @@ function parseStageContent<T>(
   return { success: true, value: parsed.data };
 }
 
+/** Repairs trivial DSL slips host-side so they never spend a correction turn. */
+function parseRepairedReviewDsl(
+  document: string,
+  stage: Exclude<ReviewStage, "triage">,
+  state: ReviewEvidenceState,
+): unknown {
+  const repaired = repairReviewDsl(document);
+  state.notices.push(...repaired.repairs);
+  return parseReviewDsl(repaired.document, stage);
+}
+
+const maxCorrections = 3;
+
 function requestCorrection(
   messages: ModelMessage[],
   content: string,
   errors: string[],
   corrections: number,
 ): void {
-  if (corrections > 2)
+  if (corrections > maxCorrections)
     throw new GusError(
       "PROVIDER_PROTOCOL",
       "The stage could not produce a complete, evidence-valid result after bounded corrections.",
     );
   messages.push({ role: "assistant", content });
-  messages.push({
-    role: "user",
-    content: JSON.stringify({
-      protocolCorrection: errors,
-      instruction:
-        "Correct the REVIEW v1 DSL or obtain missing evidence with the available tools. Keep unresolved concerns explicit; never invent citations to satisfy the schema.",
-    }),
-  });
+  messages.push({ role: "user", content: correctionMessage(errors) });
+}
+
+/** Carries each failure verbatim, one per line, followed by the single instruction. */
+export function correctionMessage(errors: string[]): string {
+  return [
+    "Protocol correction. The host rejected your previous output for these reasons:",
+    ...errors.map((error) => `- ${error}`),
+    "",
+    "Resend the complete corrected document ending with END. Keep unresolved concerns explicit as questions or unverified candidates; never invent evidence IDs to satisfy the host.",
+  ].join("\n");
 }
 
 async function inspectWithTool(
@@ -468,7 +483,6 @@ async function inspectWithTool(
   budget: ReviewBudget,
   state: ReviewEvidenceState,
   context: ReviewContext,
-  onToolExecution?: (name: string, execution: ToolExecution) => void,
 ): Promise<void> {
   budget.beginTool();
   if (!input.tools.definitions.some((tool) => tool.name === call.name))
@@ -505,18 +519,36 @@ async function inspectWithTool(
     });
     return;
   }
-  addEvidence(state.evidence, execution.evidence, input.repository.snapshot);
-  if (JSON.stringify(execution).length > input.config.review.maxToolOutputChars)
-    throw new GusError(
-      "BUDGET_EXCEEDED",
-      "A repository tool response exceeded maxToolOutputChars. Its evidence was not silently clipped.",
-    );
-  for (const path of execution.inspectedPaths) state.inspectedPaths.add(path);
-  onToolExecution?.(call.name, execution);
-  state.notices.push(...execution.warnings);
+  recordToolExecution(input, state, execution);
   messages.push({
     role: "tool",
     toolCallId: call.id,
-    content: context.projectTool(execution),
+    content: context.projectTool(
+      clipToolContent(execution, input.config.review.maxToolOutputChars),
+    ),
   });
+}
+
+/** Records a repository read's evidence, completed inspections, and warnings; shared by model and host reads. */
+export function recordToolExecution(
+  input: ReviewInput,
+  state: ReviewEvidenceState,
+  execution: ToolExecution,
+): void {
+  addEvidence(state.evidence, execution.evidence, input.repository.snapshot);
+  for (const path of execution.inspectedPaths) state.inspectedPaths.add(path);
+  state.notices.push(...execution.warnings);
+}
+
+/** The executor clips its own output; this guard keeps an oversized result from ever failing the stage. */
+function clipToolContent(
+  execution: ToolExecution,
+  maxChars: number,
+): ToolExecution {
+  if (execution.content.length <= maxChars) return execution;
+  const droppedChars = execution.content.length - maxChars;
+  return {
+    ...execution,
+    content: `${execution.content.slice(0, maxChars)}\n… [truncated ${droppedChars} chars; request a narrower range]`,
+  };
 }

@@ -96,11 +96,6 @@ describe("review coverage and notices", () => {
     let investigationCalls = 0;
     let validationCalls = 0;
     const stages: string[] = [];
-    input.tools.definitions.push({
-      name: "read_diff",
-      description: "Read a pinned diff range.",
-      parameters: { type: "object", properties: { path: { type: "string" } } },
-    });
     input.model.complete = async (request) => {
       stages.push(request.stage);
       if (request.stage === "investigate") {
@@ -111,8 +106,7 @@ describe("review coverage and notices", () => {
             inputTokens: 70_000,
           };
       }
-      if (request.stage === "validate" && ++validationCalls === 2)
-        return toolCompletion("validate-large", "read_diff", "src/large.ts");
+      if (request.stage === "validate") validationCalls += 1;
       return answerStage(request, analysis);
     };
     input.tools.execute = async () => ({
@@ -128,7 +122,8 @@ describe("review coverage and notices", () => {
 
     expect(stages).toContain("validate");
     expect(stages).toContain("report");
-    expect(validationCalls).toBe(3);
+    // Validation no longer demands independent re-reads; the host re-reads cited ranges itself.
+    expect(validationCalls).toBe(1);
     expect(result.verdict).toBe("changes-requested");
     expect(result.limitations).toEqual([]);
     expect(result.diagnostics).toContain(
@@ -136,32 +131,23 @@ describe("review coverage and notices", () => {
     );
   });
 
-  it("lets validation repair missing patch coverage after an early assessment", async () => {
+  it("never asks validation to page a truncated patch; the host already did", async () => {
     const input = reviewTestInput();
     input.repository.files = input.repository.files.map((file) => ({
       ...file,
       truncated: true,
     }));
-    let validations = 0;
-    let repairInstructions = "";
-    input.tools.definitions.push({
-      name: "read_diff",
-      description: "Read missing pinned diff rows.",
-      parameters: { type: "object", properties: { path: { type: "string" } } },
-    });
+    const validationMessages: string[] = [];
     input.model.complete = async (request) => {
-      if (request.stage === "validate" && ++validations === 2) {
-        repairInstructions = JSON.stringify(request.messages);
-        return toolCompletion("repair-patch", "read_diff", "src/a.ts");
-      }
+      if (request.stage === "validate")
+        validationMessages.push(JSON.stringify(request.messages));
       return answerStage(request);
     };
 
     const result = await reviewChange(input);
 
-    expect(validations).toBe(3);
-    expect(repairInstructions).toContain("read_diff");
-    expect(repairInstructions).toContain("src/a.ts");
+    expect(validationMessages).toHaveLength(1);
+    expect(validationMessages[0]).not.toContain("Protocol correction");
     expect(result.verdict).toBe("ready");
     expect(result.coverage[0]?.status).toBe("inspected");
   });
@@ -231,7 +217,8 @@ describe("review coverage and notices", () => {
         return answerStage(request);
       },
     };
-    input.tools.execute = async () => {
+    input.tools.execute = async (name) => {
+      if (name === "read_diff") return unfinishedDiffPage();
       reads += 1;
       const read = fileExecution(
         `evidence-${reads}`,
@@ -263,7 +250,7 @@ describe("review coverage and notices", () => {
     expect(result.limitations).toEqual([]);
   });
 
-  it("keeps genuinely unfinished coverage incomplete even when page warnings are informational", async () => {
+  it("keeps genuinely unfinished coverage partial without withholding the verdict", async () => {
     const input = reviewTestInput();
     input.repository.files = input.repository.files.map((file) => ({
       ...file,
@@ -282,20 +269,17 @@ describe("review coverage and notices", () => {
       warnings: ["Further pages remain unread."],
     });
     const result = await reviewChange(input);
+    // Partial coverage is a rendered fact; it never becomes a verdict or a limitation row.
     expect(result).toMatchObject({
-      verdict: "incomplete",
-      architecture: null,
-      tests: null,
+      verdict: "ready",
+      architecture: { grade: "A" },
+      tests: { grade: "B" },
+      coverageSummary: { status: "partial", partial: 1 },
     });
     expect(result.coverage[0]?.status).toBe("partial");
     expect(result.diagnostics).toContain("Further pages remain unread.");
-    expect(result.limitations).toContain(
-      `src/a.ts: ${result.coverage[0]?.reason}`,
-    );
+    expect(result.limitations).toEqual([]);
     const report = formatReviewMarkdown(result, input.subject, input.config);
-    expect(report).toContain("Review incomplete");
-    expect(report).toContain("### Limitations");
-    expect(report).toContain("1 partial");
     expect(report).not.toContain("Further pages remain unread.");
   });
 
@@ -378,3 +362,12 @@ describe("review coverage and notices", () => {
     );
   });
 });
+
+function unfinishedDiffPage() {
+  return {
+    content: JSON.stringify({ path: "src/a.ts", patch: "", nextLine: null }),
+    evidence: [],
+    inspectedPaths: [],
+    warnings: [],
+  };
+}

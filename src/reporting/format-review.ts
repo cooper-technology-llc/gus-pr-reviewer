@@ -1,173 +1,173 @@
 import type { GusConfig } from "../config/config-schema.js";
 import type { ReviewSubject } from "../review/review-ports.js";
-import type { ReviewFinding, ReviewResult } from "../review/review-schema.js";
-import { formatModelUsage } from "./logic/format-model-usage.js";
+import type {
+  ReviewFinding,
+  ReviewFindingExcerpt,
+  ReviewResult,
+} from "../review/review-schema.js";
 import {
-  addReportIdentity,
+  blobUrl,
+  escapeCode,
+  escapeMarkdown,
+  fencedBlock,
+  safeUrl,
+  shortSha,
+} from "./logic/markdown-text.js";
+import {
+  reviewHeadline,
+  reviewNotes,
+  type ReviewLinks,
+} from "./logic/review-headline.js";
+import {
+  addHiddenReviewComment,
   formatFindingMarker,
-  formatReviewState,
   stateFromReview,
 } from "./review-state.js";
 
-/** Renders all findings and verification limits, independently of inline publication or personality. */
+export type { ReviewLinks } from "./logic/review-headline.js";
+
+const EXCERPT_MAX_LINES = 12;
+const SUMMARY_MAX_SENTENCES = 3;
+
+/**
+ * Renders the short PR comment: verdict line, findings with evidence, summary, take, links,
+ * and one hidden state comment. Everything else lives on the Check Run page and in the JSON.
+ */
 export function formatReviewMarkdown(
   review: ReviewResult,
   subject: ReviewSubject,
   config: GusConfig,
+  links: ReviewLinks = {},
 ): string {
-  const verdict =
-    review.verdict === "ready"
-      ? "No blocking findings identified"
-      : review.verdict === "changes-requested"
-        ? "Changes requested by the reviewer"
-        : "Review incomplete";
-  const sections = [
-    `## ${escapeMarkdown(config.name)} review`,
-    "",
-    `**${verdict}**`,
-    "",
-    escapeMarkdown(review.summary),
-    "",
-    `Reviewed HEAD \`${escapeCode(review.snapshot.headSha)}\` against base \`${escapeCode(review.snapshot.baseSha)}\`.`,
-    `Comparison: \`${escapeCode(review.snapshot.comparisonBaseSha)}\`. Integration: **${review.snapshot.integration.status}**.`,
-    "",
-  ];
-
-  if (
-    review.verdict !== "incomplete" &&
-    config.review.scorecard &&
-    (review.architecture || review.tests)
-  ) {
-    sections.push(
-      "### Scorecard",
-      "",
-      "| Size | Architecture | Tests | Risk |",
-      "| --- | --- | --- | --- |",
-      `| ${review.size} | ${review.architecture?.grade ?? "Not graded"} | ${review.tests?.grade ?? "Not graded"} | ${review.risk} |`,
-      "",
-    );
-    if (review.architecture)
-      sections.push(
-        `Architecture: ${escapeMarkdown(review.architecture.reason)}`,
-        "",
-      );
-    if (review.tests)
-      sections.push(`Tests: ${escapeMarkdown(review.tests.reason)}`, "");
-  } else if (review.verdict !== "incomplete" && config.review.scorecard) {
-    sections.push(`Size: **${review.size}** · Risk: **${review.risk}**.`, "");
-  }
-  if (review.verdict === "incomplete")
-    sections.push(
-      "No approval or merge-readiness conclusion is issued for an incomplete review.",
-      "",
-    );
-
-  if (review.findings.length > 0 || review.verdict === "incomplete")
-    sections.push("### Findings", "");
-  if (review.findings.length === 0 && review.verdict === "incomplete")
-    sections.push(
-      "No validated findings are available from this incomplete review.",
-      "",
-    );
+  const sections = [`**${reviewHeadline(config.name, review)}**`];
+  const notes = reviewNotes(review);
+  if (notes.length > 0) sections.push(notes.join("\n"));
   for (const finding of review.findings)
-    sections.push(formatFindingMarkdown(finding, review, subject), "");
-
-  if (review.reconciliations.length > 0) {
-    sections.push("### Previous findings", "");
-    for (const resolution of review.reconciliations)
-      sections.push(
-        `- \`${escapeCode(resolution.id)}\`: **${resolution.status}** — ${escapeMarkdown(resolution.reason)}${resolution.evidenceIds.length ? ` Evidence: ${resolution.evidenceIds.map((id) => `\`${escapeCode(id)}\``).join(", ")}.` : ""}`,
-      );
-    sections.push("");
-  }
-  const actionableAdvice = review.snapshot.advisories.filter(
-    (advisory) => advisory.action !== "none",
-  );
-  if (actionableAdvice.length > 0) {
-    sections.push("### Branch advice", "");
-    for (const advisory of actionableAdvice)
-      sections.push(
-        `- ${escapeMarkdown(advisory.message)} ${escapeMarkdown(advisory.evidence)} Action: ${advisory.action}.`,
-      );
-    sections.push("");
-  }
-  if (review.questions.length > 0)
-    sections.push(
-      "### Open questions",
-      "",
-      ...review.questions.map((question) => `- ${escapeMarkdown(question)}`),
-      "",
-    );
-
-  sections.push("### Verification", "");
-  if (review.checks.length === 0)
-    sections.push("No executed check results were supplied.");
-  for (const check of review.checks) {
-    const status =
-      check.headSha === review.snapshot.headSha
-        ? check.status
-        : "inconclusive (different HEAD)";
-    sections.push(
-      `- **${escapeMarkdown(check.name)}: ${status}** — ${escapeMarkdown(check.details)}${check.url ? ` [Evidence](${safeUrl(check.url)})` : ""}`,
-    );
-  }
-  sections.push("");
-  const counts = { inspected: 0, partial: 0, excluded: 0, unreviewed: 0 };
-  for (const file of review.coverage) counts[file.status] += 1;
-  sections.push(
-    `Coverage: ${counts.inspected} inspected, ${counts.partial} partial, ${counts.excluded} excluded, ${counts.unreviewed} unreviewed.`,
-    "",
-  );
-  for (const file of review.coverage.filter(
-    (entry) => entry.status !== "inspected",
-  ))
-    sections.push(
-      `- \`${escapeCode(file.path)}\` — ${file.status}: ${escapeMarkdown(file.reason)}`,
-    );
-  if (review.limitations.length > 0)
-    sections.push(
-      "",
-      "### Limitations",
-      "",
-      ...review.limitations.map(
-        (limitation) => `- ${escapeMarkdown(limitation)}`,
-      ),
-    );
-
-  if (config.personality.enabled && review.personality.trim())
-    sections.push(
-      "",
-      `### ${escapeMarkdown(config.name)}'s take`,
-      "",
-      `> ${escapeMarkdown(review.personality.replace(/\s+/g, " ").trim())}`,
-    );
-  const usage = review.usage;
-  const accounting =
-    usage.usageComplete === false
-      ? "Token accounting is incomplete."
-      : `${usage.inputTokens} input / ${usage.outputTokens} output tokens.`;
-  const cost =
-    usage.costUsd === null
-      ? "Cost unavailable."
-      : `Reported cost: $${usage.costUsd.toFixed(4)}${usage.usageComplete === false ? " (partial accounting)" : ""}.`;
-  sections.push(
-    "",
-    "---",
-    "",
-    `Models: ${usage.models.map((model) => `\`${escapeCode(model)}\``).join(", ") || "none"}. ${usage.requests} requests, ${usage.toolCalls} tool calls. ${accounting} ${cost}`,
-    "",
-    ...formatModelUsage(usage.calls ?? []),
-    "",
-    formatReviewState(stateFromReview(review)),
-  );
-  return addReportIdentity(
-    sections
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim(),
-  );
+    sections.push(formatCommentFinding(finding, review, subject));
+  const previous = formatPreviousFindings(review);
+  if (previous) sections.push(previous);
+  sections.push(escapeMarkdown(firstSentences(review.summary)));
+  const take = review.personality.replace(/\s+/g, " ").trim();
+  if (config.personality.enabled && take)
+    sections.push(`> ${escapeMarkdown(take)}`);
+  const linksLine = formatLinksLine(links);
+  if (linksLine) sections.push(linksLine);
+  return addHiddenReviewComment(sections.join("\n\n"), stateFromReview(review));
 }
 
+function formatCommentFinding(
+  finding: ReviewFinding,
+  review: ReviewResult,
+  subject: ReviewSubject,
+): string {
+  const sha =
+    finding.side === "LEFT" ? review.snapshot.baseSha : review.snapshot.headSha;
+  const location = `\`${escapeCode(finding.path)}:${finding.line}\``;
+  const url = blobUrl(subject, sha, finding.path, finding.line);
+  const lines = [
+    `#### ${finding.severity.toUpperCase()} · ${escapeMarkdown(finding.title)}`,
+    `${url ? `[${location}](${safeUrl(url)})` : location} · ${finding.disposition}`,
+    `**Trigger:** ${escapeMarkdown(finding.trigger)}`,
+    `**Impact:** ${escapeMarkdown(finding.impact)}`,
+    `**Fix:** ${escapeMarkdown(finding.suggestion)}`,
+  ];
+  const excerpts = findingExcerpts(finding, review);
+  if (excerpts.length > 0) lines.push(formatEvidenceDetails(excerpts, subject));
+  return lines.join("\n\n");
+}
+
+/** Host-attached excerpts, or the cited evidence clipped the same way for reviews that predate them. */
+function findingExcerpts(
+  finding: ReviewFinding,
+  review: ReviewResult,
+): ReviewFindingExcerpt[] {
+  if (finding.excerpts.length > 0) return finding.excerpts;
+  return finding.evidenceIds.flatMap((id) => {
+    const evidence = review.evidence.find((entry) => entry.id === id);
+    if (!evidence || !evidence.text.trim()) return [];
+    return [
+      {
+        evidenceId: evidence.id,
+        path: evidence.path,
+        revision: evidence.revision,
+        sha: evidence.sha,
+        startLine: evidence.startLine,
+        endLine: evidence.endLine,
+        text: evidence.text
+          .split("\n")
+          .slice(0, EXCERPT_MAX_LINES)
+          .join("\n")
+          .trimEnd(),
+      },
+    ];
+  });
+}
+
+function formatEvidenceDetails(
+  excerpts: ReviewFindingExcerpt[],
+  subject: ReviewSubject,
+): string {
+  const blocks = excerpts.map((excerpt) => {
+    const range =
+      excerpt.endLine > excerpt.startLine
+        ? `${excerpt.startLine}-${excerpt.endLine}`
+        : `${excerpt.startLine}`;
+    const where =
+      excerpt.revision === "integration"
+        ? "prospective integration"
+        : shortSha(excerpt.sha);
+    const label = `\`${escapeCode(excerpt.path)}:${range} @ ${escapeCode(where)}\``;
+    const url =
+      excerpt.revision === "integration"
+        ? null
+        : blobUrl(
+            subject,
+            excerpt.sha,
+            excerpt.path,
+            excerpt.startLine,
+            excerpt.endLine,
+          );
+    const heading = url ? `[${label}](${safeUrl(url)})` : label;
+    return `${heading}\n\n${fencedBlock(excerpt.text)}`;
+  });
+  return [
+    `<details><summary>Evidence (${excerpts.length})</summary>`,
+    ...blocks,
+    "</details>",
+  ].join("\n\n");
+}
+
+function formatPreviousFindings(review: ReviewResult): string | null {
+  if (review.reconciliations.length === 0) return null;
+  const rows = review.reconciliations.map(
+    (resolution) =>
+      `- \`${escapeCode(resolution.id)}\`: **${resolution.status}** — ${escapeMarkdown(firstSentences(resolution.reason, 1))}`,
+  );
+  return [
+    `<details><summary>Previous findings (${review.reconciliations.length})</summary>`,
+    rows.join("\n"),
+    "</details>",
+  ].join("\n\n");
+}
+
+function formatLinksLine(links: ReviewLinks): string | null {
+  const parts: string[] = [];
+  if (links.checkRunUrl) parts.push(`[details](${safeUrl(links.checkRunUrl)})`);
+  if (links.artifactUrl)
+    parts.push(`[evidence json](${safeUrl(links.artifactUrl)})`);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function firstSentences(
+  text: string,
+  limit: number = SUMMARY_MAX_SENTENCES,
+): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const sentences = normalized.split(/(?<=[.!?])\s+(?=[A-Z0-9`"'(])/);
+  return sentences.slice(0, limit).join(" ");
+}
+
+/** Full finding body for inline comments and follow-up issues, with its thread marker. */
 export function formatFindingMarkdown(
   finding: ReviewFinding,
   review?: ReviewResult,
@@ -203,37 +203,8 @@ function formatEvidenceLink(
       evidence.endLine === evidence.startLine ? "" : `-${evidence.endLine}`;
     return `\`${escapeCode(id)}\` (prospective integration, \`${escapeCode(evidence.path)}:${evidence.startLine}${endLine}\`)`;
   }
-  if (!evidence || !subject?.url || !subject.repository)
-    return `\`${escapeCode(id)}\``;
-  try {
-    const origin = new URL(subject.url).origin;
-    const filePath = evidence.path.split("/").map(encodeURIComponent).join("/");
-    return `[${escapeMarkdown(id)}](${origin}/${subject.repository}/blob/${encodeURIComponent(evidence.sha)}/${filePath}#L${evidence.startLine})`;
-  } catch {
-    return `\`${escapeCode(id)}\``;
-  }
-}
-
-function safeUrl(value: string): string {
-  try {
-    const url = new URL(value);
-    return ["https:", "http:"].includes(url.protocol) &&
-      !url.username &&
-      !url.password
-      ? url.href.replace(/\(/g, "%28").replace(/\)/g, "%29")
-      : "#";
-  } catch {
-    return "#";
-  }
-}
-function escapeCode(value: string): string {
-  return value.replace(/`/g, "'").replace(/[\r\n]/g, " ");
-}
-function escapeMarkdown(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/@/g, "@\u200b")
-    .replace(/([\\`*_[\]])/g, "\\$1");
+  const url = evidence
+    ? blobUrl(subject, evidence.sha, evidence.path, evidence.startLine)
+    : null;
+  return url ? `[${escapeMarkdown(id)}](${url})` : `\`${escapeCode(id)}\``;
 }

@@ -21,21 +21,37 @@ the event, PR status, fork policy, and a manual requester's permission before
 the review job can enter per-PR concurrency. Ordinary discussion cannot cancel
 another review by merely triggering the workflow.
 
-The review job uses `contents: read`, `pull-requests: write`, and `issues: write`.
-If you remove issue permissions, also keep issue commands/automation disabled
-in your usage. Repository or organization settings must permit reviews using
-the token. A personal or app token needs equivalent repository access.
+The review job uses `contents: read`, `pull-requests: write`, `issues: write`,
+and `checks: write`. If you remove issue permissions, also keep issue
+commands/automation disabled in your usage. Without `checks: write` Gus skips
+the Check Run, records a notice, and still posts the review. Repository or
+organization settings must permit reviews using the token. A personal or app
+token needs equivalent repository access.
 
-Gus posts `COMMENT` reviews. His verdict is advisory text and an exit code;
-he does not submit an approval, merge, change protection, or rewrite branches.
-The step fails for changes requested or incomplete review. Choose whether to
-make that workflow a required repository check yourself.
+Gus posts `COMMENT` reviews. He does not submit an approval, merge, change
+protection, or rewrite branches. His verdict is carried by a Check Run named
+`Gus review` on the head commit:
+
+| Verdict                                    | Conclusion |
+| ------------------------------------------ | ---------- |
+| ready, full coverage                       | `success`  |
+| changes requested                          | `failure`  |
+| ready with partial coverage, or incomplete | `neutral`  |
+
+The "Ask Gus" step runs with `continue-on-error: true`; a final step fails the
+job only when `gus-review.json` is missing or its `publication.status` is not
+`published` or `already-published`. A red job therefore means "no review was
+posted", never "Gus had an opinion". Make the `Gus review` check required if you
+want the verdict to gate merges.
 
 ## Events and commands
 
-The template listens to `pull_request_target`, new issue comments, new inline
-review comments, and manual dispatch. Automatic draft reviews are skipped;
-authorized manual commands can request a draft review.
+The template listens to `pull_request_target` (`opened`, `synchronize`,
+`reopened`, `ready_for_review`), new issue comments, new inline review comments,
+and manual dispatch. It does not listen to `edited`, so title or body edits
+start no run; after retargeting a PR to another base, comment `@gus` to request
+a fresh review. Automatic draft reviews are skipped; authorized manual commands
+can request a draft review.
 
 Write a command on its own line:
 
@@ -141,6 +157,16 @@ operation from npm during review jobs. See
 
 ## Results and retries
 
+The PR comment carries the verdict line, findings with collapsed evidence
+excerpts, a short summary, Gus's take, `[details]` and `[evidence json]` links,
+and one hidden `<!-- gus-review:v1 … gus-report:v1 … -->` comment with the
+state later reviews reconcile against. The Check Run page carries the long form:
+revisions, grades, coverage table, supplied checks, limitations, diagnostics,
+open questions, previous findings, branch advice, and usage by stage (clipped at
+65,000 characters), plus one annotation per head-side finding (at most 50). When
+a new review is posted, earlier Gus reviews on the PR are edited to
+`Superseded by [this review](…) at <sha7>.` and keep their hidden state.
+
 JSON artifacts include review evidence, coverage, usage, rendered Markdown,
 and confirmed publication outcomes. They can contain source code; keep artifact
 access aligned with source access.
@@ -152,5 +178,7 @@ with GitHub instead of blindly repeated.
 
 Publication distinguishes `dry-run`, `published`, `already-published`, `partial`,
 and `stale`, with confirmed review URL, issue IDs, inline count, resolved-thread
-count, and Slack outcome. Partial/stale results exit 2 even if the old technical
-review said ready. Inspect those outcomes before retrying.
+count, and Slack outcome. Partial/stale results exit 2 whatever the verdict.
+Skipped Check Runs and unsuperseded earlier reviews appear in
+`publication.errors` as notices without changing the status. Inspect those
+outcomes before retrying.

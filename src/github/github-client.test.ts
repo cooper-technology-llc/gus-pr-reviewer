@@ -196,4 +196,78 @@ describe("GitHub client", () => {
     }).listIssues();
     expect(requested).toContain("state=all");
   });
+  it("creates a completed check run on the head SHA", async () => {
+    const requests: Array<{ method: string; path: string; body: unknown }> = [];
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      requests.push({
+        method: init?.method ?? "GET",
+        path: new URL(String(input)).pathname,
+        body: JSON.parse(String(init?.body)),
+      });
+      return Response.json({
+        id: 11,
+        html_url: "https://github.com/acme/widgets/runs/11",
+      });
+    };
+    const output = { title: "t", summary: "s", text: "x", annotations: [] };
+    const created = await createGitHubClient({
+      repository: "acme/widgets",
+      token: "test-token",
+      fetch,
+    }).createCheckRun({
+      name: "Gus review",
+      headSha: "head-sha",
+      conclusion: "neutral",
+      detailsUrl: "https://github.com/acme/widgets/actions/runs/9",
+      output,
+    });
+    expect(created).toEqual({
+      id: 11,
+      url: "https://github.com/acme/widgets/runs/11",
+    });
+    expect(requests).toEqual([
+      {
+        method: "POST",
+        path: "/repos/acme/widgets/check-runs",
+        body: {
+          name: "Gus review",
+          head_sha: "head-sha",
+          status: "completed",
+          conclusion: "neutral",
+          details_url: "https://github.com/acme/widgets/actions/runs/9",
+          output,
+        },
+      },
+    ]);
+  });
+  it("updates a review body with a single PUT and surfaces a 403 as a status", async () => {
+    const requests: Array<{ method: string; path: string }> = [];
+    let status = 200;
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      requests.push({
+        method: init?.method ?? "GET",
+        path: new URL(String(input)).pathname,
+      });
+      return status === 200
+        ? Response.json({
+            id: 3,
+            html_url: "https://github.com/acme/widgets/pull/7#review-3",
+          })
+        : new Response("forbidden", { status });
+    };
+    const client = createGitHubClient({
+      repository: "acme/widgets",
+      token: "test-token",
+      fetch,
+    });
+    await client.updateReview(7, 3, "Superseded.");
+    expect(requests).toEqual([
+      { method: "PUT", path: "/repos/acme/widgets/pulls/7/reviews/3" },
+    ]);
+    status = 403;
+    await expect(client.updateReview(7, 3, "Superseded.")).rejects.toThrow(
+      "HTTP 403",
+    );
+    expect(requests).toHaveLength(2);
+  });
 });

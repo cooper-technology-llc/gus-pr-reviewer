@@ -108,6 +108,7 @@ async function runPullRequestReview(
       priorReviews,
       config,
       publish: options.publish === true,
+      environment,
       signal,
       ...(options.requestedIssues !== undefined
         ? { requestedIssues: options.requestedIssues }

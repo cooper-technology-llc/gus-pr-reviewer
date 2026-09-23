@@ -164,7 +164,7 @@ describe("local review application", () => {
     ).toBe(true);
     expect(completed.review.limitations).toEqual([]);
     expect(completed.publication.status).toBe("dry-run");
-    expect(completed.markdown).toContain("Base Gus review");
+    expect(completed.markdown.startsWith("**Base Gus · ready · ")).toBe(true);
     expect(completed.review.personality).toContain("shelve without a ladder");
     expect(requests).toHaveLength(5);
     expect(requests.every((request) => request.model === "fixture/model")).toBe(

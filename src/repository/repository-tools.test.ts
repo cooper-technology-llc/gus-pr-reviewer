@@ -241,6 +241,30 @@ describe("repository reads and evidence", () => {
     ).toBe(true);
   });
 
+  it("clips a single line longer than maxToolOutputChars instead of throwing", async () => {
+    const repository = await fixture();
+    await repository.write("base.txt", "base\n");
+    await repository.commit("base");
+    await repository.git("checkout", "-b", "child");
+    const hugeLine = "z".repeat(5000);
+    await repository.write("minified.txt", `${hugeLine}\n`);
+    await repository.commit("minified source");
+    const config = configSchema.parse({ review: { maxToolOutputChars: 1000 } });
+    const session = await sessionFor(repository, config);
+    const result = await createRepositoryTools(session, config).execute(
+      "read_file",
+      { path: "minified.txt" },
+    );
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(1000);
+    expect(result.inspectedPaths).toEqual([]);
+    expect(result.evidence).toEqual([]);
+    expect(result.content).toContain("request a narrower range");
+    expect(result.truncated?.droppedChars).toBeGreaterThan(0);
+    // The clip cuts the raw JSON mid-string rather than dropping the read
+    // entirely; a real run of the source line's own text must survive.
+    expect(result.content).toContain("z".repeat(50));
+  });
+
   it("literal search has a resumable cursor and cannot be turned into a regular expression", async () => {
     const repository = await fixture();
     await repository.write("base.txt", "base\n");
@@ -278,6 +302,96 @@ describe("repository reads and evidence", () => {
       "needle.* again",
       "needle.* last",
     ]);
+  });
+
+  it("caps search hits at 50 with a moreHits count and trims a long matched line", async () => {
+    const repository = await fixture();
+    await repository.write("base.txt", "base\n");
+    await repository.commit("base");
+    await repository.git("checkout", "-b", "child");
+    const longLine = `needle ${"z".repeat(300)}`;
+    const lines = Array.from({ length: 55 }, (_, index) =>
+      index === 5 ? longLine : "needle hit",
+    );
+    await repository.write("many.txt", `${lines.join("\n")}\n`);
+    await repository.commit("search source");
+    const session = await sessionFor(repository);
+    const tools = createRepositoryTools(session, defaultConfig);
+    const result = await tools.execute("search", {
+      query: "needle",
+      pattern: "many.txt",
+      maxMatches: 50,
+    });
+    const output = z
+      .object({
+        matches: z.array(
+          z.object({
+            path: z.string(),
+            line: z.number(),
+            text: z.string(),
+            evidenceId: z.string(),
+          }),
+        ),
+        moreHits: z.number(),
+      })
+      .parse(JSON.parse(result.content));
+    expect(output.matches).toHaveLength(50);
+    expect(output.moreHits).toBe(5);
+    expect(result.evidence).toHaveLength(50);
+    const longMatch = output.matches.find((match) => match.line === 6);
+    expect(longMatch?.text).toHaveLength(200);
+    expect(longMatch?.text).toBe(longLine.slice(0, 200));
+  });
+
+  it("clips the largest file in a read_files batch first so small files are not starved", async () => {
+    const repository = await fixture();
+    await repository.write("base.txt", "base\n");
+    await repository.commit("base");
+    await repository.git("checkout", "-b", "child");
+    await repository.write("small-a.txt", "alpha\n");
+    await repository.write("small-b.txt", "beta\n");
+    const bigLines = Array.from(
+      { length: 200 },
+      (_, index) => `line ${index}: ${"x".repeat(60)}`,
+    ).join("\n");
+    await repository.write("big.txt", `${bigLines}\n`);
+    await repository.commit("batch source");
+    const config = configSchema.parse({ review: { maxToolOutputChars: 4000 } });
+    const session = await sessionFor(repository, config);
+    const tools = createRepositoryTools(session, config);
+    const result = await tools.execute("read_files", {
+      files: [
+        { path: "small-a.txt" },
+        { path: "small-b.txt" },
+        { path: "big.txt", endLine: 200 },
+      ],
+    });
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(4000);
+    const output = z
+      .object({
+        results: z.array(
+          z.object({
+            file: z.object({
+              path: z.string(),
+              text: z.string(),
+              truncated: z.boolean(),
+            }),
+            evidenceId: z.string(),
+          }),
+        ),
+      })
+      .parse(JSON.parse(result.content));
+    const fileFor = (path: string) =>
+      output.results.find((entry) => entry.file.path === path)?.file;
+    expect(fileFor("small-a.txt")).toMatchObject({
+      text: "alpha",
+      truncated: false,
+    });
+    expect(fileFor("small-b.txt")).toMatchObject({
+      text: "beta",
+      truncated: false,
+    });
+    expect(fileFor("big.txt")?.truncated).toBe(true);
   });
 
   it("keeps all metadata when the initial changed-file budget is smaller than the diff", async () => {

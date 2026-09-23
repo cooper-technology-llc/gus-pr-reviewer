@@ -118,3 +118,11 @@ export const resolvedThreadSchema = z.object({
   }),
   errors: z.array(z.unknown()).optional(),
 });
+export const createdCheckRunSchema = z.object({
+  id: z.number().int(),
+  html_url: z.url(),
+});
+export const updatedReviewSchema = z.object({
+  id: z.number().int(),
+  html_url: z.url(),
+});

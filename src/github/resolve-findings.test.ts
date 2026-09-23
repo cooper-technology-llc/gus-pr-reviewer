@@ -30,6 +30,7 @@ describe("evidenced thread resolution", () => {
         suggestion: "Persist it.",
         evidenceIds: ["e1"],
         disposition: "blocking",
+        excerpts: [],
       },
     ];
     previous.findings.push({
@@ -44,6 +45,7 @@ describe("evidenced thread resolution", () => {
       suggestion: "Retain it.",
       evidenceIds: ["e1"],
       disposition: "blocking",
+      excerpts: [],
     });
     review.reconciliations = [
       {
@@ -107,6 +109,7 @@ describe("evidenced thread resolution", () => {
       threadsResolved: 0,
       slackSent: false,
       errors: [],
+      notices: [],
     };
     await resolveEvidencedFindings(
       {

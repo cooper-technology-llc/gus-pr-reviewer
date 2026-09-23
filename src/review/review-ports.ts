@@ -130,6 +130,8 @@ export interface ToolExecution {
   evidence: ReviewEvidence[];
   inspectedPaths: string[];
   warnings: string[];
+  /** Set only when the executor had to cut content to fit maxToolOutputChars; evidence is dropped whenever this is set. */
+  truncated?: { droppedChars: number };
 }
 export interface RepositoryTools {
   definitions: ModelTool[];
@@ -172,7 +174,10 @@ export interface PublicationResult {
   issues: Array<{ number: number; url: string; created: boolean }>;
   threadsResolved: number;
   slackSent: boolean;
+  /** The review itself (or a required action) failed to publish. */
   errors: string[];
+  /** Non-fatal publication side effects that were skipped, such as the Check Run or superseding an earlier review. */
+  notices: string[];
 }
 export interface CompletedReview {
   review: ReviewResult;

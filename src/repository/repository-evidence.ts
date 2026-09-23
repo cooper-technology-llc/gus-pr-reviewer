@@ -108,6 +108,7 @@ export function diffEvidence(
   return records;
 }
 
+/** Builds a tool result and, when it would exceed maxChars, clips it to fit instead of discarding it. Never throws for size. */
 export function toolResult(
   value: unknown,
   evidence: ReviewEvidence[],
@@ -115,26 +116,83 @@ export function toolResult(
   warnings: string[],
   maxChars: number,
 ): ToolExecution {
-  const content = JSON.stringify(value);
-  const result = {
-    content,
+  const full: ToolExecution = {
+    content: JSON.stringify(value),
     evidence,
     inspectedPaths: [...new Set(inspectedPaths)],
     warnings,
   };
-  if (JSON.stringify(result).length <= maxChars) return result;
-  const warning =
-    "Tool output exceeded the configured limit. Request a smaller page or source range; this result provides no source evidence.";
-  const limited: ToolExecution = {
-    content: JSON.stringify({
-      error: "OUTPUT_LIMIT",
-      truncated: true,
-      message: warning,
-    }),
+  return fitsEnvelope(full, maxChars) ? full : clipToFit(full, maxChars);
+}
+
+function fitsEnvelope(execution: ToolExecution, maxChars: number): boolean {
+  return JSON.stringify(execution).length <= maxChars;
+}
+
+/**
+ * Keeps as much of an over-budget tool result's content as fits the
+ * configured output limit, with a trailing marker naming how much was cut.
+ * Evidence can no longer be trusted to describe content it no longer sits
+ * beside once the envelope must be cut, so it is dropped along with it.
+ */
+function clipToFit(execution: ToolExecution, maxChars: number): ToolExecution {
+  const clipped = largestFittingClip(execution, maxChars);
+  if (clipped !== null) return clipped;
+  // Even an empty content string does not fit alongside inspectedPaths and
+  // warnings; drop those too and keep only the truncation marker.
+  return {
+    content: truncationMarker(execution.content.length),
     evidence: [],
     inspectedPaths: [],
-    warnings: [...warnings, warning],
+    warnings: [],
+    truncated: { droppedChars: execution.content.length },
   };
-  if (JSON.stringify(limited).length <= maxChars) return limited;
-  return { ...limited, warnings: [warning] };
+}
+
+/** Binary-searches the largest content prefix (plus marker) that fits maxChars; null when none does. */
+function largestFittingClip(
+  execution: ToolExecution,
+  maxChars: number,
+): ToolExecution | null {
+  let low = 0;
+  let high = execution.content.length;
+  let fitting: ToolExecution | null = null;
+  while (low <= high) {
+    const keep = Math.floor((low + high) / 2);
+    const candidate = clippedExecution(execution, keep);
+    if (fitsEnvelope(candidate, maxChars)) {
+      fitting = candidate;
+      low = keep + 1;
+    } else {
+      high = keep - 1;
+    }
+  }
+  return fitting;
+}
+
+const EVIDENCE_DROPPED_WARNING =
+  "Evidence for this result was dropped to fit maxToolOutputChars; request a narrower range for verifiable evidence.";
+
+function clippedExecution(
+  execution: ToolExecution,
+  keep: number,
+): ToolExecution {
+  const droppedChars = execution.content.length - keep;
+  const base = { evidence: [], inspectedPaths: execution.inspectedPaths };
+  if (droppedChars <= 0)
+    return {
+      ...base,
+      content: execution.content,
+      warnings: [...execution.warnings, EVIDENCE_DROPPED_WARNING],
+    };
+  return {
+    ...base,
+    content: execution.content.slice(0, keep) + truncationMarker(droppedChars),
+    warnings: execution.warnings,
+    truncated: { droppedChars },
+  };
+}
+
+function truncationMarker(droppedChars: number): string {
+  return `\n… [truncated ${droppedChars} chars; request a narrower range]`;
 }

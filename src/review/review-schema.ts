@@ -82,6 +82,18 @@ export const evidenceSchema = z.strictObject({
 });
 export type ReviewEvidence = z.infer<typeof evidenceSchema>;
 
+/** Host-attached source text for one cited evidence ID, re-read at its pinned revision. */
+export const findingExcerptSchema = z.strictObject({
+  evidenceId: z.string().min(1),
+  path: z.string(),
+  revision: revisionSchema,
+  sha: z.string(),
+  startLine: z.number().int().nonnegative(),
+  endLine: z.number().int().nonnegative(),
+  text: z.string(),
+});
+export type ReviewFindingExcerpt = z.infer<typeof findingExcerptSchema>;
+
 export const findingSchema = z.strictObject({
   id: z.string().min(1).max(100),
   title: z.string().min(1).max(200),
@@ -94,6 +106,7 @@ export const findingSchema = z.strictObject({
   suggestion: z.string().min(1).max(4000),
   evidenceIds: z.array(z.string().min(1)).min(1).max(30),
   disposition: z.enum(["blocking", "follow-up"]).default("blocking"),
+  excerpts: z.array(findingExcerptSchema).max(30).default([]),
 });
 export type ReviewFinding = z.infer<typeof findingSchema>;
 
@@ -163,8 +176,20 @@ export interface PriorReview {
 
 export interface ReviewCoverage {
   path: string;
-  status: "inspected" | "excluded" | "unreviewed" | "partial";
+  /** not-applicable: binary content or a pure rename, which have no reviewable text change. */
+  status:
+    "inspected" | "excluded" | "unreviewed" | "partial" | "not-applicable";
   reason: string;
+}
+
+/** Counts per coverage status; partial when any file was not fully read. */
+export interface ReviewCoverageSummary {
+  status: "full" | "partial";
+  inspected: number;
+  partial: number;
+  unreviewed: number;
+  excluded: number;
+  notApplicable: number;
 }
 
 export interface ReviewModelCallContext {
@@ -205,6 +230,7 @@ export interface ReviewUsage {
 export interface ReviewResult {
   version: 1;
   snapshot: ReviewSnapshot;
+  /** incomplete only when no validated assessment exists; coverage gaps and questions never set it. */
   verdict: "ready" | "changes-requested" | "incomplete";
   summary: string;
   risk: z.infer<typeof riskSchema>;
@@ -216,6 +242,7 @@ export interface ReviewResult {
   tests: z.infer<typeof gradeSchema> | null;
   personality: string;
   coverage: ReviewCoverage[];
+  coverageSummary: ReviewCoverageSummary;
   evidence: ReviewEvidence[];
   checks: CheckResult[];
   limitations: string[];

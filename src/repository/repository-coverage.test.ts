@@ -79,6 +79,59 @@ describe("completed repository inspection", () => {
     expect(rest.inspectedPaths).toEqual(["change.txt"]);
   });
 
+  it("clips a read_file page to the output budget without crediting it as a complete read", async () => {
+    const fixture = await createGitFixture();
+    directories.push(fixture.directory);
+    const lines = Array.from(
+      { length: 60 },
+      (_, index) => `line ${index + 1}: ${"a".repeat(60)}`,
+    );
+    await fixture.write("wide.txt", "base\n");
+    await fixture.commit("base");
+    await fixture.git("checkout", "-b", "child");
+    await fixture.write("wide.txt", `${lines.join("\n")}\n`);
+    await fixture.commit("wide source");
+    const config = configSchema.parse({ review: { maxToolOutputChars: 2000 } });
+    const session = await createRepositorySession(
+      {
+        path: fixture.directory,
+        base: "trunk",
+        head: "child",
+        defaultBranch: "trunk",
+      },
+      { config },
+    );
+    sessions.push(session);
+    const tools = createRepositoryTools(session, config);
+    const pageSchema = z.object({
+      truncated: z.boolean(),
+      nextLine: z.number().nullable(),
+    });
+    let startLine = 1;
+    let pages = 0;
+    for (;;) {
+      const page = await tools.execute("read_file", {
+        path: "wide.txt",
+        startLine,
+        endLine: 60,
+      });
+      expect(JSON.stringify(page).length).toBeLessThanOrEqual(2000);
+      const output = pageSchema.parse(JSON.parse(page.content));
+      pages += 1;
+      if (output.nextLine === null) {
+        expect(output.truncated).toBe(false);
+        expect(page.inspectedPaths).toEqual(["wide.txt"]);
+        break;
+      }
+      // Every page short of the last must never be credited as a complete
+      // read of this path, even though each individual page fits maxChars.
+      expect(output.truncated).toBe(true);
+      expect(page.inspectedPaths).toEqual([]);
+      startLine = output.nextLine;
+    }
+    expect(pages).toBeGreaterThan(1);
+  });
+
   it("combines delivered batches, including pages requested out of order", async () => {
     const { tools } = await changedFile();
     const last = await tools.execute("read_files", {
@@ -259,9 +312,9 @@ describe("completed repository inspection", () => {
       startLine: oversizedRow,
       lineCount: 1,
     });
-    expect(JSON.parse(rejected.content)).toMatchObject({
-      error: "OUTPUT_LIMIT",
-    });
+    expect(JSON.stringify(rejected).length).toBeLessThanOrEqual(6000);
+    expect(rejected.content).toContain("request a narrower range");
+    expect(rejected.truncated?.droppedChars).toBeGreaterThan(0);
     expect(rejected.evidence).toEqual([]);
     expect(rejected.inspectedPaths).toEqual([]);
     for (let startLine = 1; startLine <= rows.length; startLine += 1) {
@@ -271,7 +324,7 @@ describe("completed repository inspection", () => {
         startLine,
         lineCount: 1,
       });
-      expect(delivered.content).not.toContain("OUTPUT_LIMIT");
+      expect(delivered.truncated).toBeUndefined();
       expect(delivered.inspectedPaths).toEqual([]);
     }
   });

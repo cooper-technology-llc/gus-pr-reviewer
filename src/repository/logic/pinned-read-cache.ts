@@ -105,6 +105,9 @@ function copyExecution(execution: ToolExecution): ToolExecution {
     evidence: execution.evidence.map((entry) => ({ ...entry })),
     inspectedPaths: [...execution.inspectedPaths],
     warnings: [...execution.warnings],
+    ...(execution.truncated !== undefined
+      ? { truncated: { ...execution.truncated } }
+      : {}),
   };
 }
 

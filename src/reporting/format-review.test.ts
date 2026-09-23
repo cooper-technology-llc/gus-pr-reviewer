@@ -1,9 +1,11 @@
-// The report keeps findings, factual grades and verification limits independent of optional personality.
+// The PR comment is short: verdict line, findings with evidence, summary, take, links, one hidden state comment.
 import { describe, expect, it } from "vitest";
 import { configSchema } from "../config/config-schema.js";
 import type {
+  ReviewCoverage,
   ReviewEvidence,
-  ReviewModelCallUsage,
+  ReviewFinding,
+  ReviewResult,
 } from "../review/review-schema.js";
 import {
   makePullRequest,
@@ -13,70 +15,161 @@ import {
 import { formatReviewMarkdown } from "./format-review.js";
 import { parseReviewState, readReportIdentity } from "./review-state.js";
 
-describe("review report", () => {
-  it("omits empty grades and findings while retaining concise verification for a completed review", () => {
-    const review = makeReview();
-    review.architecture = null;
-    review.tests = null;
-    review.diagnostics = ["A search skipped an unrelated binary attachment."];
-    const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
+const HIDDEN_COMMENT = /\n*<!-- gus-review:v1 [^>]*-->$/;
 
-    expect(report).toContain("No blocking findings identified");
-    expect(report).toContain("Widget updates preserve existing values.");
-    expect(report).not.toContain("### Scorecard");
-    expect(report).not.toContain("Not graded");
-    expect(report).not.toContain("### Findings");
-    expect(report).not.toContain("No findings.");
-    expect(report).not.toContain("binary attachment");
-    expect(report).toContain("No executed check results were supplied.");
-    expect(report).not.toContain("Source review does not establish");
-    expect(report).toContain(
-      "1 inspected, 0 partial, 0 excluded, 0 unreviewed",
-    );
-    expect(readReportIdentity(report)).not.toBeNull();
-  });
+function visibleLength(report: string): number {
+  return report.replace(HIDDEN_COMMENT, "").length;
+}
 
-  it("shows actionable branch advice and retains informational history only in the review data", () => {
-    const review = makeReview();
-    const history = {
-      code: "history-rewritten",
-      message: "History was rewritten.",
-      evidence: "The previous head is not an ancestor.",
-      action: "none" as const,
-    };
-    review.snapshot.advisories = [history];
-    const historyOnly = formatReviewMarkdown(
-      review,
+function makeFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
+  return {
+    id: "f1",
+    title: "Persist widget updates before replying",
+    severity: "major",
+    path: "src/widgets/update-widget.ts",
+    line: 42,
+    side: "RIGHT",
+    trigger: "A client updates a widget while another request is in flight.",
+    impact: "The second write silently overwrites the first one.",
+    suggestion:
+      "Compare the stored version before writing and reject stale updates.",
+    evidenceIds: ["e1"],
+    disposition: "blocking",
+    excerpts: [
+      {
+        evidenceId: "e1",
+        path: "src/widgets/update-widget.ts",
+        revision: "head",
+        sha: "0123456789abcdef0123456789abcdef01234567",
+        startLine: 40,
+        endLine: 44,
+        text: [
+          "export async function updateWidget(id, patch) {",
+          "  const widget = await store.read(id);",
+          "  await store.write(id, { ...widget, ...patch });",
+          "  return widget;",
+          "}",
+        ].join("\n"),
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function twoFindingReview(): ReviewResult {
+  const review = makeReview();
+  review.verdict = "changes-requested";
+  review.summary =
+    "The change adds widget updates and a batch endpoint. Concurrent updates can lose data. The batch path skips validation.";
+  review.findings = [
+    makeFinding(),
+    makeFinding({
+      id: "f2",
+      title: "Validate batch items like single updates",
+      severity: "minor",
+      path: "src/widgets/batch.ts",
+      line: 17,
+      trigger: "A batch request contains an item with a negative quantity.",
+      impact: "Invalid widgets are stored.",
+      suggestion: "Run the single-update validator on every batch item.",
+      evidenceIds: ["e2"],
+      disposition: "follow-up",
+      excerpts: [
+        {
+          evidenceId: "e2",
+          path: "src/widgets/batch.ts",
+          revision: "head",
+          sha: "0123456789abcdef0123456789abcdef01234567",
+          startLine: 15,
+          endLine: 18,
+          text: "for (const item of items) {\n  await store.write(item.id, item);\n}\nreturn items.length;",
+        },
+      ],
+    }),
+  ];
+  review.coverage = Array.from({ length: 63 }, (_, index): ReviewCoverage => ({
+    path: `src/file-${index}.ts`,
+    status: index < 61 ? "inspected" : "partial",
+    reason: "Read changed behavior.",
+  }));
+  review.coverageSummary = {
+    status: "partial",
+    inspected: 61,
+    partial: 2,
+    unreviewed: 0,
+    excluded: 0,
+    notApplicable: 0,
+  };
+  review.limitations = [
+    "The prospective integration has a conflict in src/widgets/batch.ts.",
+    "The deadline stopped one search.",
+  ];
+  review.questions = ["Is the batch endpoint behind a flag?"];
+  return review;
+}
+
+describe("review comment", () => {
+  it("leads with the verdict line and lists findings before the summary and take", () => {
+    const report = formatReviewMarkdown(
+      twoFindingReview(),
       makePullRequest(),
       testConfig,
     );
-    expect(historyOnly).not.toContain("### Branch advice");
-    expect(historyOnly).not.toContain(history.message);
-    review.snapshot.advisories.push({
-      code: "conflict",
-      message: "Resolve the target conflict.",
-      evidence: "widget.ts conflicts in the prospective integration.",
-      action: "resolve-conflicts",
-    });
-    const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
-    expect(report).toContain("### Branch advice");
-    expect(report).toContain("Resolve the target conflict.");
-    expect(report).toContain("Action: resolve-conflicts");
-    expect(report).not.toContain(history.message);
-    expect(report).not.toContain("Action: none");
-    expect(review.snapshot.advisories).toHaveLength(2);
+
+    expect(
+      report.startsWith(
+        "**Gus · changes requested · 2 findings · coverage 61/63**",
+      ),
+    ).toBe(true);
+    const firstFinding = report.indexOf("#### MAJOR · Persist widget updates");
+    const secondFinding = report.indexOf("#### MINOR · Validate batch items");
+    const summary = report.indexOf("The change adds widget updates");
+    const take = report.indexOf("> A tidy home for widget updates.");
+    expect(firstFinding).toBeGreaterThan(0);
+    expect(secondFinding).toBeGreaterThan(firstFinding);
+    expect(summary).toBeGreaterThan(secondFinding);
+    expect(take).toBeGreaterThan(summary);
   });
 
-  it("preserves legacy material limitations, missing coverage and failed or stale checks", () => {
-    const review = makeReview();
-    review.verdict = "incomplete";
-    review.limitations = ["The current caller could not be inspected."];
-    review.questions = ["Does the deployed caller accept this value?"];
-    review.coverage[0] = {
-      path: "widget.ts",
-      status: "partial",
-      reason: "Only the first page was available.",
-    };
+  it("renders each finding with a head permalink, labeled lines and a collapsed evidence excerpt", () => {
+    const report = formatReviewMarkdown(
+      twoFindingReview(),
+      makePullRequest(),
+      testConfig,
+    );
+
+    expect(report).toContain(
+      "[`src/widgets/update-widget.ts:42`](https://github.com/acme/widgets/blob/head-sha/src/widgets/update-widget.ts#L42) · blocking",
+    );
+    expect(report).toContain("**Trigger:** A client updates a widget");
+    expect(report).toContain("**Impact:** The second write");
+    expect(report).toContain("**Fix:** Compare the stored version");
+    expect(report).toContain("<details><summary>Evidence (1)</summary>");
+    expect(report).toContain(
+      "[`src/widgets/update-widget.ts:40-44 @ 0123456`](https://github.com/acme/widgets/blob/0123456789abcdef0123456789abcdef01234567/src/widgets/update-widget.ts#L40-L44)",
+    );
+    expect(report).toContain(
+      "```\nexport async function updateWidget(id, patch) {",
+    );
+  });
+
+  it("keeps a two-finding review under 2,500 visible characters", () => {
+    const report = formatReviewMarkdown(
+      twoFindingReview(),
+      makePullRequest(),
+      testConfig,
+      {
+        checkRunUrl: "https://github.com/acme/widgets/runs/11",
+        artifactUrl:
+          "https://github.com/acme/widgets/actions/runs/99#artifacts",
+      },
+    );
+
+    expect(visibleLength(report)).toBeLessThan(2_500);
+  });
+
+  it("drops verification, coverage lists, limitation lists, usage and boilerplate", () => {
+    const review = twoFindingReview();
     review.checks = [
       {
         name: "unit",
@@ -84,73 +177,138 @@ describe("review report", () => {
         headSha: "head-sha",
         details: "The widget assertion failed.",
       },
-      {
-        name: "integration",
-        status: "passed",
-        headSha: "old-head",
-        details: "Only the previous revision ran.",
-      },
     ];
     const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
-    expect(review.diagnostics).toBeUndefined();
-    expect(report).toContain("Review incomplete");
-    expect(report).toContain(
-      "No validated findings are available from this incomplete review.",
-    );
-    expect(report).toContain("### Limitations");
-    expect(report).toContain(review.limitations[0]);
-    expect(report).toContain(review.questions[0]);
-    expect(report).toContain("1 partial");
-    expect(report).toContain("Only the first page was available.");
-    expect(report).toContain("unit: failed");
-    expect(report).toContain("integration: inconclusive (different HEAD)");
+
+    expect(report).not.toContain("### Verification");
+    expect(report).not.toContain("### Limitations");
+    expect(report).not.toContain("### Scorecard");
+    expect(report).not.toContain("src/file-62.ts");
+    expect(report).not.toContain("unit: failed");
+    expect(report).not.toContain("tool calls");
+    expect(report).not.toContain("Model usage by stage");
+    expect(report).not.toContain("No approval or merge-readiness");
+    expect(report).not.toContain("Reviewed HEAD");
+    expect(report).not.toContain("Comparison:");
   });
 
-  it("round-trips hidden state and detects changed report content", () => {
-    const review = makeReview();
-    const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
-    expect(parseReviewState(report)?.headSha).toBe("head-sha");
-    expect(readReportIdentity(report)).not.toBeNull();
+  it("keeps one-line coverage, limits and question notes", () => {
+    const report = formatReviewMarkdown(
+      twoFindingReview(),
+      makePullRequest(),
+      testConfig,
+    );
+
+    expect(report).toContain(
+      "Coverage partial: 2 files not fully read (see details).",
+    );
+    expect(report).toContain(
+      "Limits: The prospective integration has a conflict in src/widgets/batch.ts. and 1 more",
+    );
+    expect(report).toContain("1 open question (see details).");
+  });
+
+  it("omits the notes for full coverage without limitations", () => {
+    const report = formatReviewMarkdown(
+      makeReview(),
+      makePullRequest(),
+      testConfig,
+    );
+
     expect(
-      readReportIdentity(
-        report.replace("Widget updates preserve", "Widget updates discard"),
-      ),
+      report.startsWith("**Gus · ready · 0 findings · coverage 1/1**"),
+    ).toBe(true);
+    expect(report).not.toContain("Coverage partial");
+    expect(report).not.toContain("Limits:");
+    expect(report).toContain("Widget updates preserve existing values.");
+  });
+
+  it("renders the links line only for the links that are known", () => {
+    const review = makeReview();
+    const none = formatReviewMarkdown(review, makePullRequest(), testConfig);
+    const both = formatReviewMarkdown(review, makePullRequest(), testConfig, {
+      checkRunUrl: "https://github.com/acme/widgets/runs/11",
+      artifactUrl: "https://github.com/acme/widgets/actions/runs/99#artifacts",
+    });
+    const artifactOnly = formatReviewMarkdown(
+      review,
+      makePullRequest(),
+      testConfig,
+      {
+        checkRunUrl: null,
+        artifactUrl:
+          "https://github.com/acme/widgets/actions/runs/99#artifacts",
+      },
+    );
+
+    expect(none).not.toContain("[details]");
+    expect(none).not.toContain("[evidence json]");
+    expect(both).toContain(
+      "[details](https://github.com/acme/widgets/runs/11) · [evidence json](https://github.com/acme/widgets/actions/runs/99#artifacts)",
+    );
+    expect(artifactOnly).not.toContain("[details]");
+    expect(artifactOnly).toContain("[evidence json](");
+  });
+
+  it("carries exactly one hidden comment with state and an identity that ignores run links", () => {
+    const review = twoFindingReview();
+    const plain = formatReviewMarkdown(review, makePullRequest(), testConfig);
+    const linked = formatReviewMarkdown(review, makePullRequest(), testConfig, {
+      checkRunUrl: "https://github.com/acme/widgets/runs/11",
+    });
+
+    expect(plain.match(/<!--/g)).toHaveLength(1);
+    expect(plain).not.toContain("gus-finding:v1");
+    expect(parseReviewState(plain)?.headSha).toBe("head-sha");
+    expect(parseReviewState(plain)?.findings[0]?.excerpts).toEqual([]);
+    expect(readReportIdentity(plain)).not.toBeNull();
+    expect(readReportIdentity(linked)).toBe(readReportIdentity(plain));
+    expect(
+      readReportIdentity(plain.replace("Concurrent updates", "Rare updates")),
     ).toBeNull();
-    expect(report).toBe(
+    expect(plain).toBe(
       formatReviewMarkdown(review, makePullRequest(), testConfig),
     );
   });
-  it("keeps persona optional without changing factual grades", () => {
+
+  it("still reads the state of a review posted with the pre-0.1.8 separate comments", () => {
+    const report = formatReviewMarkdown(
+      makeReview(),
+      makePullRequest(),
+      testConfig,
+    );
+    const legacy = report.replace(
+      / gus-report:v1 ([a-f0-9]{64}) -->/,
+      " -->\n\n<!-- gus-report:v1 $1 -->",
+    );
+
+    expect(parseReviewState(legacy)?.headSha).toBe("head-sha");
+    expect(readReportIdentity(legacy)).toBeNull();
+  });
+
+  it("keeps the take optional", () => {
     const review = makeReview();
-    const enabled = formatReviewMarkdown(review, makePullRequest(), testConfig);
     const disabled = formatReviewMarkdown(
       review,
       makePullRequest(),
       configSchema.parse({ personality: { enabled: false } }),
     );
-    expect(enabled).toContain("A tidy home for widget updates.");
+
     expect(disabled).not.toContain("A tidy home for widget updates.");
-    expect(disabled).toContain("| S | A | B | low |");
-    expect(disabled).toContain("No executed check results");
   });
-  it("does not show a scorecard for incomplete reviews or describe missing cost as free", () => {
+
+  it("clips the summary to three sentences", () => {
     const review = makeReview();
-    review.verdict = "incomplete";
-    review.usage.usageComplete = false;
+    review.summary = "One. Two. Three. Four is too many.";
     const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
-    expect(report).not.toContain("### Scorecard");
-    expect(report).toContain("Review incomplete");
-    expect(report).toContain("Cost unavailable");
-    expect(report).toContain("accounting is incomplete");
+
+    expect(report).toContain("One. Two. Three.");
+    expect(report).not.toContain("Four is too many.");
   });
-  it("labels prospective integration evidence without fabricating a remote blob link", () => {
+
+  it("falls back to cited evidence and never links prospective integration text", () => {
     const review = makeReview();
-    const revisions: ReviewEvidence["revision"][] = [
-      "head",
-      "base",
-      "parent",
-      "integration",
-    ];
+    const revisions: ReviewEvidence["revision"][] = ["head", "integration"];
     review.evidence = revisions.map((revision) => ({
       id: revision,
       path: "widget.ts",
@@ -158,157 +316,49 @@ describe("review report", () => {
       sha: revision === "integration" ? "local-merge-tree" : `${revision}-sha`,
       startLine: 1,
       endLine: 2,
-      text: "return value;",
+      text: "return value;\nreturn other;",
       kind: "file",
       truncated: false,
     }));
     review.findings = [
-      {
-        id: "f1",
-        title: "Retain widget values after integration",
-        severity: "major",
+      makeFinding({
         path: "widget.ts",
         line: 1,
-        side: "RIGHT",
-        trigger: "The updated branches are combined.",
-        impact: "Existing widget values are lost.",
-        suggestion: "Preserve the existing values.",
         evidenceIds: revisions,
-        disposition: "blocking",
-      },
-    ];
-
-    const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
-
-    expect(report).toContain("Retain widget values after integration");
-    expect(report).toContain(
-      "`integration` (prospective integration, `widget.ts:1-2`)",
-    );
-    expect(report).not.toContain("/blob/local-merge-tree/");
-    for (const revision of ["head", "base", "parent"]) {
-      expect(report).toContain(
-        `[${revision}](https://github.com/acme/widgets/blob/${revision}-sha/widget.ts#L1)`,
-      );
-    }
-  });
-
-  it("collapses provider usage into one row per stage with retries and repeated tools counted", () => {
-    const review = makeReview();
-    review.usage = {
-      inputTokens: 600,
-      outputTokens: 90,
-      costUsd: 0.06,
-      requests: 4,
-      toolCalls: 3,
-      elapsedMs: 2000,
-      models: ["example/model"],
-      usageComplete: true,
-      calls: [
-        makeCall({ stage: "triage" }),
-        makeCall({
-          turn: 2,
-          inputTokens: 200,
-          outputTokens: 30,
-          costUsd: 0.02,
-          attempts: 2,
-          elapsedMs: 1000,
-          toolNames: ["read_file", "read_file"],
-        }),
-        makeCall({
-          turn: 3,
-          trigger: "tool-results",
-          inputTokens: 300,
-          outputTokens: 40,
-          costUsd: 0.03,
-          elapsedMs: 500,
-          toolNames: ["search"],
-        }),
-      ],
-    };
-
-    const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
-
-    expect(report).toContain(
-      "<details>\n<summary>Model usage by stage</summary>",
-    );
-    expect(report).toContain(
-      "| Stage | Calls | Attempts | Tools | Input tokens | Output tokens | Cost | Time |",
-    );
-    expect(report).toContain(
-      "| triage | 1 | 1 | 0 | 100 | 20 | $0.0100 | 0.25s |",
-    );
-    expect(report).toContain(
-      "| investigate | 2 | 3 | 3 | 500 | 70 | $0.0500 | 1.50s |",
-    );
-    expect(report).toContain("</details>");
-    expect(parseReviewState(report)?.headSha).toBe("head-sha");
-    expect(readReportIdentity(report)).not.toBeNull();
-  });
-
-  it("marks stage totals unknown when a failed call has no provider accounting", () => {
-    const review = makeReview();
-    review.verdict = "incomplete";
-    review.usage.usageComplete = false;
-    review.usage.calls = [
-      makeCall(),
-      makeCall({
-        turn: 2,
-        trigger: "tool-results",
-        inputTokens: null,
-        outputTokens: null,
-        costUsd: null,
-        attempts: 2,
-        elapsedMs: 1000,
-        status: "failed",
+        excerpts: [],
       }),
     ];
 
     const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
 
+    expect(report).toContain("<details><summary>Evidence (2)</summary>");
     expect(report).toContain(
-      "| investigate | 2 | 3 | 0 | Unknown | Unknown | Unknown | 1.25s |",
+      "[`widget.ts:1-2 @ head-sh`](https://github.com/acme/widgets/blob/head-sha/widget.ts#L1-L2)",
     );
-    expect(report).toContain("1 failed call");
-    expect(report).not.toContain("$0.0000");
-    expect(report).toContain("accounting is incomplete");
+    expect(report).toContain("`widget.ts:1-2 @ prospective integration`");
+    expect(report).not.toContain("/blob/local-merge-tree/");
   });
 
-  it("keeps the existing aggregate report for legacy usage without call records", () => {
+  it("uses a fence that excerpt backticks cannot close", () => {
     const review = makeReview();
-    expect(review.usage.calls).toBeUndefined();
+    review.findings = [
+      makeFinding({
+        excerpts: [
+          {
+            evidenceId: "e1",
+            path: "docs/readme.md",
+            revision: "head",
+            sha: "head-sha",
+            startLine: 1,
+            endLine: 3,
+            text: "```ts\nconst value = 1;\n```",
+          },
+        ],
+      }),
+    ];
 
     const report = formatReviewMarkdown(review, makePullRequest(), testConfig);
 
-    expect(report).toContain(
-      "1 requests, 1 tool calls. 10 input / 5 output tokens.",
-    );
-    expect(report).not.toContain("Model usage by stage");
-    expect(parseReviewState(report)?.headSha).toBe("head-sha");
-    expect(readReportIdentity(report)).not.toBeNull();
+    expect(report).toContain("````\n```ts\nconst value = 1;\n```\n````");
   });
 });
-
-function makeCall(
-  overrides: Partial<ReviewModelCallUsage> = {},
-): ReviewModelCallUsage {
-  return {
-    stage: "investigate",
-    model: "example/model",
-    trigger: "initial",
-    policyChars: 100,
-    turn: 1,
-    inputChars: 1000,
-    systemChars: 200,
-    seedChars: 500,
-    toolResultChars: 0,
-    toolDefinitionChars: 200,
-    inputTokens: 100,
-    outputTokens: 20,
-    costUsd: 0.01,
-    attempts: 1,
-    elapsedMs: 250,
-    status: "completed",
-    toolNames: [],
-    ...overrides,
-  };
-}

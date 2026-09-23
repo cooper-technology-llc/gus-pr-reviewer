@@ -9,8 +9,9 @@ import {
   testAnalysis,
   toolCompletion,
 } from "./review-test-fixtures.js";
-import { analysisSchema } from "./stage-schemas.js";
+import { analysisSchema, validationSchema } from "./stage-schemas.js";
 import {
+  correctionMessage,
   runStructuredStage,
   type ReviewEvidenceState,
 } from "./structured-stage.js";
@@ -137,5 +138,71 @@ describe("runStructuredStage compact submit", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("gives validate the same compact escape as investigate", async () => {
+    const options = stageFixture(async () =>
+      jsonCompletion({ ...testAnalysis(), candidateResolutions: [] }),
+    );
+    const result = await runStructuredStage({
+      ...options,
+      stage: "validate",
+      schema: validationSchema,
+    });
+    expect(result.candidateResolutions).toEqual([]);
+    expect(options.state.notices).toContain(
+      "The fat investigation conversation could not finish a valid assessment; the host started a compact DSL submit.",
+    );
+  });
+
+  it("clips oversized tool output instead of failing the stage", async () => {
+    const calls: ModelRequest[] = [];
+    const input = reviewTestInput({
+      model: {
+        complete: async (request) => {
+          calls.push(request);
+          return calls.length === 1
+            ? toolCompletion("read", "read_file", "src/a.ts")
+            : jsonCompletion(testAnalysis());
+        },
+      },
+    });
+    input.tools.execute = async () => ({
+      content: "x".repeat(input.config.review.maxToolOutputChars + 10),
+      inspectedPaths: [],
+      warnings: [],
+      evidence: [],
+    });
+    const state: ReviewEvidenceState = {
+      evidence: new Map(),
+      inspectedPaths: new Set(),
+      limitations: [],
+      notices: [],
+    };
+    await runStructuredStage({
+      input,
+      budget: new ReviewBudget(input.config, () => 0),
+      state,
+      stage: "investigate",
+      schema: analysisSchema,
+      content: "{}",
+    });
+    expect(JSON.stringify(calls[1]?.messages)).toContain(
+      "[truncated 10 chars; request a narrower range]",
+    );
+  });
+});
+
+describe("correctionMessage", () => {
+  it("carries each failure verbatim followed by the instruction", () => {
+    const failures = [
+      "line 4: FINDING | a | major — expected 7 pipe fields, got 3",
+      "Candidate c-1 was silently dropped.",
+    ];
+    const message = correctionMessage(failures);
+    const lines = message.split("\n");
+    expect(lines).toContain(`- ${failures[0]}`);
+    expect(lines).toContain(`- ${failures[1]}`);
+    expect(lines.at(-1)).toContain("Resend the complete corrected document");
   });
 });

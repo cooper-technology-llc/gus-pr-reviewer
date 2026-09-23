@@ -6,6 +6,8 @@ import {
   reportNarrativeSchema,
   validationSchema,
 } from "../stage-schemas.js";
+import { assessmentWorkedExample } from "./review-dsl-contract.js";
+import { ReviewDslError } from "./review-dsl-lexer.js";
 import { parseReviewDsl } from "./review-dsl-parser.js";
 
 const assessment = `REVIEW v1
@@ -300,5 +302,112 @@ EVIDENCE | head-1 | caller-1`);
       "investigate",
     );
     expect(analysisSchema.safeParse(parsed).success).toBe(false);
+  });
+
+  it.each(["investigate", "validate"] as const)(
+    "accepts the prompt's worked example verbatim for %s",
+    (stage) => {
+      const schema = stage === "validate" ? validationSchema : analysisSchema;
+      const parsed = schema.parse(
+        parseReviewDsl(assessmentWorkedExample, stage),
+      );
+      expect(parsed.findings).toHaveLength(1);
+      expect(parsed.findings[0]).toMatchObject({
+        severity: "major",
+        side: "RIGHT",
+        disposition: "blocking",
+      });
+    },
+  );
+});
+
+function dslError(
+  content: string,
+  stage: "investigate" | "validate" | "report" = "investigate",
+): ReviewDslError {
+  try {
+    parseReviewDsl(content, stage);
+  } catch (error) {
+    if (error instanceof ReviewDslError) return error;
+    throw error;
+  }
+  throw new Error("The document was expected to fail.");
+}
+
+describe("positioned DSL errors", () => {
+  it("names the line, quotes it, and re-prints the record's grammar for a short FINDING header", () => {
+    const header = "FINDING | issue-1 | major | src/value.ts | 12 | RIGHT";
+    const error = dslError(
+      withRecords(
+        finding.replace(
+          "FINDING | issue-1 | major | src/value.ts | 12 | RIGHT | blocking",
+          header,
+        ),
+      ),
+    );
+    expect(error.line).toBe(7);
+    expect(error.lineText).toBe(header);
+    expect(error.message).toBe(
+      `line 7: ${header} — FINDING requires 6 header field(s), received 5. Expected: FINDING | id | critical/major/minor | path | positive integer line | LEFT/RIGHT | blocking/follow-up`,
+    );
+  });
+
+  it.each([
+    ["unknown marker", withRecords("VERDICT | ready"), 7, "VERDICT | ready"],
+    ["text after END", `${assessment}\nTrailing prose`, 8, "Trailing prose"],
+    [
+      "a finding section out of order",
+      withRecords(finding.replace("TRIGGER", "IMPACT")),
+      10,
+      "IMPACT",
+    ],
+    [
+      "a finding cut off before its sections",
+      withRecords(
+        "FINDING | issue-1 | major | src/value.ts | 12 | RIGHT | blocking",
+      ),
+      7,
+      "FINDING | issue-1 | major | src/value.ts | 12 | RIGHT | blocking",
+    ],
+    [
+      "an unclosed prose fence",
+      assessment.replace(
+        "The value changes its caller contract.",
+        "```ts\nconst a = 1;",
+      ),
+      3,
+      "```ts",
+    ],
+    ["a missing header", "SUMMARY\nText.\nEND", 1, "SUMMARY"],
+  ])("reports the offending line for %s", (_name, content, line, lineText) => {
+    const error = dslError(content);
+    expect(error.line).toBe(line);
+    expect(error.lineText).toBe(lineText);
+    expect(error.message.startsWith(`line ${line}: ${lineText} — `)).toBe(true);
+  });
+
+  it("points at the extra record when a single-record stage has two", () => {
+    const error = dslError(
+      "REVIEW v1\nSUMMARY\nOne.\nSUMMARY\nTwo.\nEND",
+      "report",
+    );
+    expect(error.message).toBe(
+      "line 4: SUMMARY — report accepts only one SUMMARY record.",
+    );
+  });
+
+  it("trims a long offending line to 120 characters", () => {
+    const long = `VERDICT | ${"x".repeat(200)}`;
+    const error = dslError(withRecords(long));
+    expect(error.lineText).toBe(long);
+    expect(error.message).toBe(
+      `line 7: ${long.slice(0, 120)}… — Unknown marker VERDICT.`,
+    );
+  });
+
+  it("keeps a plain message when no line is known", () => {
+    const error = dslError(assessment.replace("\nEND", ""));
+    expect(error.line).toBeUndefined();
+    expect(error.message).toBe("DSL: Missing required END terminator.");
   });
 });

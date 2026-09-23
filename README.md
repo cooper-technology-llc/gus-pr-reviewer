@@ -10,7 +10,7 @@ He reviews GitHub pull requests or committed local branches, keeps findings tied
 to the revisions he inspected, and separates branch maintenance advice from code
 defects. Every review prompt can be extended or completely replaced.
 
-Version **0.1.7** includes the CLI and a runtime you can commit to your repository.
+Version **0.1.8** includes the CLI and a runtime you can commit to your repository.
 The earlier `0.0.1-alpha.0` package contains prompts only.
 
 Review assessments use a compact text DSL that Gus parses and validates locally
@@ -22,7 +22,7 @@ do not use provider JSON mode. See the [response protocol](docs/review-behavior.
 Run once from the repository where you want Gus:
 
 ```sh
-npx --yes gus-pr-reviewer@0.1.7 init
+npx --yes gus-pr-reviewer@0.1.8 init
 ```
 
 Setup walks you through the model provider, model, API-key environment variable,
@@ -72,7 +72,7 @@ outside their scope.
 For local CLI use, you can also install a pinned version:
 
 ```sh
-npm install --save-dev --save-exact gus-pr-reviewer@0.1.7
+npm install --save-dev --save-exact gus-pr-reviewer@0.1.8
 npx gus --help
 ```
 
@@ -137,17 +137,23 @@ a separate reviewed edit to `.github/workflows/gus-review.yml`.
 ## A useful reviewer with a personality
 
 Gus investigates with file, diff, search, and history tools, validates proposed
-findings, and reports concrete triggers, consequences, and corrections. Reviews
-include the inspected head/base, coverage, supplied check results, limits, usage,
-and a risk/size assessment. Findings carry stable identifiers for later review
-rounds; a prior accusation needs current evidence to remain open.
+findings, and reports concrete triggers, consequences, and corrections. Findings
+carry stable identifiers for later review rounds; a prior accusation needs
+current evidence to remain open.
 
-Large reviews preserve complete evidence records when compressing stage context,
-then validate candidates against a patch-free manifest and freshly reread pinned
-source covering every citation.
-If validation discovers an unread diff range, Gus asks for that range with
-`read_diff` before finalizing coverage. A prose-report failure cannot erase the
-validated technical assessment. Claims about an external API require defining
+The PR comment is short: a verdict line
+(`Gus · changes requested · 2 findings · coverage 61/63`), each finding with its
+`path:line` permalink, trigger, impact, fix, and a collapsed excerpt of the
+cited source at the pinned commit, then a short summary and Gus's take. The
+revisions, coverage table, limitations, check results, diagnostics, questions,
+and usage by stage live on the `Gus review` Check Run page and in the JSON
+artifact, both linked from the comment. A new review marks the previous Gus
+review on the PR as superseded.
+
+Coverage is the host's job: Gus pages truncated patches itself and re-reads the
+source each confirmed finding cites, so neither depends on the model asking.
+Partial coverage is one line in the comment, never a verdict. A prose-report
+failure cannot erase the validated technical assessment. Claims about an external API require defining
 evidence for the exact installed version; indirect usage or model memory alone
 becomes a focused question, not a defect.
 
@@ -257,10 +263,12 @@ GitHub commands support `--api-url` for another API host. `issues`
 supports `--config`, `--output`, and `--format`; `trigger` supports `--config`.
 Run `gus --help` for all options and combinations.
 
-Exit **0** means ready, successful, or skipped; **1** means changes requested;
-**2** means incomplete, failed, or stale/partially published. A completed static
-review does not prove tests, CI, production, or hardware behavior. Provider or
-budget failures are reported as incomplete rather than a clean review.
+With `--publish`, exit **0** means a review is on the PR (any verdict) and **2**
+means nothing was published. Without `--publish`, exit **0** means ready, **1**
+changes requested, and **2** incomplete. `incomplete` means no validated
+assessment exists; coverage gaps, open questions, binaries, and renames never
+cause it. A completed static review does not prove tests, CI, production, or
+hardware behavior.
 
 Use [check input](docs/configuration.md#observed-checks) to supply results from
 your own verification process, tied to the exact reviewed head. Gus does not

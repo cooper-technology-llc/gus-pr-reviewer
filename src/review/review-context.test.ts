@@ -136,9 +136,9 @@ describe("review source context", () => {
     );
     expect(validationContext.sourceTexts).toEqual([]);
     const payload = z
-      .object({ evidenceToReinspect: z.array(evidenceMetadataSchema) })
+      .object({ citedEvidence: z.array(evidenceMetadataSchema) })
       .parse(validationContext.payload);
-    expect(payload.evidenceToReinspect).toEqual(
+    expect(payload.citedEvidence).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "head-source",
@@ -214,11 +214,11 @@ describe("review source context", () => {
     );
     const payload = z
       .object({
-        evidenceToReinspect: z.array(evidenceMetadataSchema),
+        citedEvidence: z.array(evidenceMetadataSchema),
         evidenceIndex: z.array(evidenceMetadataSchema),
       })
       .parse(context.payload);
-    expect(payload.evidenceToReinspect.map((entry) => entry.id)).toEqual([
+    expect(payload.citedEvidence.map((entry) => entry.id)).toEqual([
       testAnalysis().coverage[0]?.evidenceIds[0],
     ]);
     expect(payload.evidenceIndex.map((entry) => entry.id)).toContain(

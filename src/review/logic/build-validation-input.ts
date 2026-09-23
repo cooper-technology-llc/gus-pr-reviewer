@@ -25,10 +25,10 @@ export function buildValidationInput(input: ValidationInput): string {
     triage: input.triage,
     candidateAssessment: input.candidateAssessment,
     evidenceIndex: evidence.map(({ text, ...metadata }) => metadata),
-    evidenceToReinspect: citedEvidence.map(({ text, ...metadata }) => metadata),
+    citedEvidence: citedEvidence.map(({ text, ...metadata }) => metadata),
     blockingSeverity: input.blockingSeverity,
     evidenceAccess:
-      "The evidence index preserves recorded provenance without replaying source text. Candidate evidence is identified separately and must be independently retrieved with the pinned repository tools before resolving the candidate; an index entry alone does not prove a claim. Inspect other source and counterevidence as needed.",
+      "The evidence index preserves recorded provenance without replaying source text. Every evidence ID you cite must exist in this index and match its recorded path and revision. The host has already collected coverage and will attach excerpts of cited ranges itself; read more only for a specific gap or contradiction.",
   });
 }
 

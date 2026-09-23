@@ -6,6 +6,7 @@ import type {
   FindingReconciliation,
   PriorReview,
   ReviewCoverage,
+  ReviewCoverageSummary,
   ReviewEvidence,
   ReviewFinding,
   ReviewSnapshot,
@@ -330,6 +331,7 @@ export function normalizeFindingIds(
     ...finding,
     id: existing.has(finding.id) ? finding.id : stableFindingId(finding),
     disposition: isBlocking(finding, config) ? "blocking" : finding.disposition,
+    excerpts: [],
   }));
 }
 
@@ -366,13 +368,19 @@ export function buildCoverage(
         status: "excluded",
         reason: "Excluded by the configured review scope.",
       };
-    const claim = claims.find((entry) => entry.path === file.path);
     if (file.binary)
       return {
         path: file.path,
-        status: "unreviewed",
-        reason: "Binary content is unavailable to the text reviewer.",
+        status: "not-applicable",
+        reason: "Binary content has no text change to review.",
       };
+    if (isPureRename(file))
+      return {
+        path: file.path,
+        status: "not-applicable",
+        reason: "Pure rename with no content change.",
+      };
+    const claim = claims.find((entry) => entry.path === file.path);
     if (!claim) {
       if (inspectedPaths.has(file.path))
         return {
@@ -403,6 +411,30 @@ export function buildCoverage(
       };
     return { path: file.path, status: claim.status, reason: claim.reason };
   });
+}
+
+/** Counts coverage rows; partial when any file was not fully read. */
+export function summarizeCoverage(
+  coverage: ReviewCoverage[],
+): ReviewCoverageSummary {
+  const count = (status: ReviewCoverage["status"]) =>
+    coverage.filter((entry) => entry.status === status).length;
+  const partial = count("partial");
+  const unreviewed = count("unreviewed");
+  return {
+    status: partial + unreviewed > 0 ? "partial" : "full",
+    inspected: count("inspected"),
+    partial,
+    unreviewed,
+    excluded: count("excluded"),
+    notApplicable: count("not-applicable"),
+  };
+}
+
+function isPureRename(file: ChangedFile): boolean {
+  return (
+    file.status === "renamed" && file.additions === 0 && file.deletions === 0
+  );
 }
 
 export function unverifiedPriorFindings(

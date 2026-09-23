@@ -254,11 +254,19 @@ function selectSourceLines(
     selected.push(line);
     charCount += line.length + 1;
   }
-  if (selected.length === 0)
-    throw new GusError(
-      "BUDGET_EXCEEDED",
-      "The requested source line exceeds the tool output limit; no partial source line was returned.",
-    );
+  if (selected.length === 0) {
+    // Even the first requested line alone is longer than maxChars. Return a
+    // clipped prefix of it rather than throwing; the caller still gets a
+    // usable (if partial) read, marked truncated so ordinary multi-page
+    // reads never mistake it for a complete page.
+    const overlong = lines[startLine - 1] ?? "";
+    return {
+      startLine,
+      endLine: startLine,
+      text: overlong.slice(0, maxChars),
+      truncated: true,
+    };
+  }
   const endLine = startLine + selected.length - 1;
   return {
     startLine,
