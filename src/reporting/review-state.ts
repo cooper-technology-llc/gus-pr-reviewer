@@ -6,24 +6,49 @@ import {
   type ReviewState,
 } from "../review/review-schema.js";
 
-const STATE_PATTERN = /<!-- gus-review:v1 ([A-Za-z0-9+/]+={0,2}) -->/g;
-const REPORT_PATTERN = /<!-- gus-report:v1 ([a-f0-9]{64}) -->/g;
+/**
+ * One hidden comment carries both the state blob and the report identity:
+ * `<!-- gus-review:v1 <base64 state> gus-report:v1 <sha256> -->`.
+ * Reviews posted before 0.1.8 used a separate `<!-- gus-report:v1 … -->` comment.
+ * Their state still parses; their identity does not, and it could never match a new report.
+ */
+const STATE_PATTERN =
+  /<!-- gus-review:v1 ([A-Za-z0-9+/]+={0,2})(?: gus-report:v1 [a-f0-9]{64})? -->/g;
+const HIDDEN_COMMENT_PATTERN =
+  /<!-- gus-review:v1 ([A-Za-z0-9+/]+={0,2}) gus-report:v1 ([a-f0-9]{64}) -->/g;
 const FINDING_PATTERN = /<!-- gus-finding:v1 ([A-Za-z0-9+/]+={0,2}) -->/;
+/** The run-specific links line stays out of the identity so a rerun still recognizes its own report. */
+const LINKS_LINE_PATTERN = /^\[(?:details|evidence json)\]\(.*$/gm;
 
+/** Excerpts are display-only and re-derivable, so they stay out of the hidden state to keep it small. */
 export function stateFromReview(review: ReviewResult): ReviewState {
   return reviewStateSchema.parse({
     version: 1,
     headSha: review.snapshot.headSha,
     baseSha: review.snapshot.baseSha,
     comparisonBaseSha: review.snapshot.comparisonBaseSha,
-    findings: review.findings,
+    findings: review.findings.map((finding) => ({ ...finding, excerpts: [] })),
     reconciliations: review.reconciliations,
     verdict: review.verdict,
   });
 }
 
-export function formatReviewState(state: ReviewState): string {
-  return `<!-- gus-review:v1 ${Buffer.from(JSON.stringify(state)).toString("base64")} -->`;
+/** Appends the single hidden comment (state plus report identity) to the visible report. */
+export function addHiddenReviewComment(
+  visible: string,
+  state: ReviewState,
+): string {
+  const content = visible.trimEnd();
+  const encoded = Buffer.from(JSON.stringify(state)).toString("base64");
+  const identity = reportIdentity(content, encoded);
+  return `${content}\n\n<!-- gus-review:v1 ${encoded} gus-report:v1 ${identity} -->`;
+}
+
+/** Returns the whole hidden state comment so it can be carried onto a superseded review. */
+export function findHiddenStateComment(body: string): string | null {
+  const markers = [...body.matchAll(STATE_PATTERN)];
+  if (markers.length !== 1) return null;
+  return markers[0]?.[0] ?? null;
 }
 
 export function parseReviewState(body: string): ReviewState | null {
@@ -54,20 +79,25 @@ export function parseReviewState(body: string): ReviewState | null {
   }
 }
 
-export function addReportIdentity(body: string): string {
-  const content = body.replace(REPORT_PATTERN, "").trimEnd();
-  return `${content}\n\n<!-- gus-report:v1 ${createHash("sha256").update(content).digest("hex")} -->`;
+export function readReportIdentity(body: string): string | null {
+  const matches = [...body.matchAll(HIDDEN_COMMENT_PATTERN)];
+  if (matches.length !== 1) return null;
+  const match = matches[0];
+  const encoded = match?.[1];
+  const identity = match?.[2];
+  if (!match || !encoded || !identity) return null;
+  const content = body.replace(match[0], "").trimEnd();
+  return reportIdentity(content, encoded) === identity ? identity : null;
 }
 
-export function readReportIdentity(body: string): string | null {
-  const matches = [...body.matchAll(REPORT_PATTERN)];
-  if (matches.length !== 1) return null;
-  const identity = matches[0]?.[1];
-  const content = body.replace(REPORT_PATTERN, "").trimEnd();
-  return identity &&
-    createHash("sha256").update(content).digest("hex") === identity
-    ? identity
-    : null;
+function reportIdentity(content: string, encodedState: string): string {
+  const stableContent = content
+    .replace(LINKS_LINE_PATTERN, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+  return createHash("sha256")
+    .update(`${stableContent}\n${encodedState}`)
+    .digest("hex");
 }
 
 export function formatFindingMarker(id: string): string {

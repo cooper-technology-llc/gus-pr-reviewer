@@ -20,9 +20,11 @@ export class GitHubRequestError extends GusError {
   }
 }
 
+export type GitHubMethod = "GET" | "POST" | "PUT";
+
 export interface GitHubTransport {
   request<T>(
-    method: "GET" | "POST",
+    method: GitHubMethod,
     route: string,
     schema: z.ZodType<T>,
     body?: unknown,
@@ -49,7 +51,7 @@ export function createGitHubTransport(
   const requestFetch = options.fetch ?? globalThis.fetch;
 
   async function send(
-    method: "GET" | "POST",
+    method: GitHubMethod,
     url: URL,
     body?: unknown,
   ): Promise<Response> {
@@ -81,7 +83,7 @@ export function createGitHubTransport(
             "GitHub request was cancelled or exceeded its deadline.",
           );
         if (method !== "GET" || attempt === 2)
-          throw new GitHubRequestError(null, method === "POST");
+          throw new GitHubRequestError(null, method !== "GET");
         await delay(250 * (attempt + 1), undefined, { signal }).catch(() => {
           throw new GusError("ABORTED", "GitHub request was cancelled.");
         });
@@ -107,10 +109,10 @@ export function createGitHubTransport(
       }
       throw new GitHubRequestError(
         response.status,
-        method === "POST" && response.status >= 500,
+        method !== "GET" && response.status >= 500,
       );
     }
-    throw new GitHubRequestError(null, method === "POST");
+    throw new GitHubRequestError(null, method !== "GET");
   }
 
   function routeUrl(route: string): URL {
@@ -146,7 +148,7 @@ export function createGitHubTransport(
 
   return {
     async request<T>(
-      method: "GET" | "POST",
+      method: GitHubMethod,
       route: string,
       schema: z.ZodType<T>,
       body?: unknown,

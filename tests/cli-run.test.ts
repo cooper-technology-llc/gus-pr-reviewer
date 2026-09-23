@@ -40,6 +40,7 @@ function publication(
     threadsResolved: 0,
     slackSent: false,
     errors: [],
+    notices: [],
   };
 }
 
@@ -84,6 +85,14 @@ function completed(
       tests: null,
       personality: "",
       coverage: [],
+      coverageSummary: {
+        status: "full",
+        inspected: 0,
+        partial: 0,
+        unreviewed: 0,
+        excluded: 0,
+        notApplicable: 0,
+      },
       evidence: [],
       checks: [],
       limitations: [],

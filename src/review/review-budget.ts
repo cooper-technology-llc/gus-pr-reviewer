@@ -18,6 +18,8 @@ interface PendingModelCall {
   usage: ReviewModelCallUsage;
 }
 
+const minimumUsefulOutputTokens = 1024;
+
 export class ReviewBudget {
   readonly deadline: number;
   private readonly startedAt: number;
@@ -47,6 +49,7 @@ export class ReviewBudget {
     tools: ModelTool[],
     requestedOutput: number,
     context?: ReviewModelCallContext,
+    reservedTokens = 0,
   ): number {
     this.requireTime();
     if (this.turns >= this.config.review.maxTurns)
@@ -71,17 +74,20 @@ export class ReviewBudget {
       );
     }
     const remainingTokens =
-      this.config.review.maxTotalTokens - this.inputTokens - this.outputTokens;
+      this.config.review.maxTotalTokens -
+      this.inputTokens -
+      this.outputTokens -
+      reservedTokens;
     const inputReservation =
       Buffer.byteLength(serialized, "utf8") + messages.length * 16 + 256;
     const outputLimit = Math.min(
       requestedOutput,
       remainingTokens - inputReservation,
     );
-    if (outputLimit <= 0)
+    if (outputLimit < Math.min(requestedOutput, minimumUsefulOutputTokens))
       throw new GusError(
         "BUDGET_EXCEEDED",
-        "The remaining token budget cannot accommodate this request and its input reservation.",
+        "The remaining token budget cannot accommodate useful output after reserving request input and downstream review stages.",
       );
     this.turns += 1;
     this.requests += 1;
@@ -122,6 +128,24 @@ export class ReviewBudget {
         }
       : null;
     return outputLimit;
+  }
+
+  availableModelInputBytes(
+    requestedOutput: number,
+    reservedTokens = 0,
+    messageCount = 0,
+  ): number {
+    const minimumOutput = Math.min(requestedOutput, minimumUsefulOutputTokens);
+    return Math.max(
+      0,
+      this.config.review.maxTotalTokens -
+        this.inputTokens -
+        this.outputTokens -
+        reservedTokens -
+        minimumOutput -
+        messageCount * 16 -
+        256,
+    );
   }
 
   recordCompletion(completion: ModelCompletion): void {

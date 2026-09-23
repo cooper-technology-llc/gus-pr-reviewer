@@ -30,6 +30,7 @@ const projectedEvidenceSchema = z.object({
   truncated: z.boolean(),
   text: textReferenceSchema,
 });
+const evidenceMetadataSchema = projectedEvidenceSchema.omit({ text: true });
 const contextEnvelopeSchema = z.object({
   format: z.literal("gus-context-v1"),
   sourceTexts: z.array(z.object({ id: z.string(), text: z.string() })),
@@ -74,8 +75,11 @@ describe("review source context", () => {
             `${request.stage}-${turn}`,
             turn === 3 ? "integration" : "head",
           );
-        if (request.stage === "validate" && turn === 1)
-          return readCompletion("validate-1", "head");
+        if (request.stage === "validate" && turn <= 2)
+          return readCompletion(
+            `validate-${turn}`,
+            turn === 1 ? "head" : "integration",
+          );
         return answerStage(request, analysis);
       },
     };
@@ -100,12 +104,15 @@ describe("review source context", () => {
         request.stage === "validate" ||
         request.messages.some((message) => message.role === "tool"),
     );
-    expect(inspectionRequests).toHaveLength(5);
+    expect(inspectionRequests).toHaveLength(6);
     for (const request of inspectionRequests) {
+      const hasToolResult = request.messages.some(
+        (message) => message.role === "tool",
+      );
       expect(
         occurrences(JSON.stringify(request.messages), sourceMarker),
         request.stage,
-      ).toBe(1);
+      ).toBe(request.stage === "validate" && !hasToolResult ? 0 : 1);
       expectReferencesResolved(request.messages);
     }
 
@@ -127,36 +134,31 @@ describe("review source context", () => {
     const validationContext = parseEnvelope(
       validation.messages.find((message) => message.role === "user"),
     );
-    expect(
-      validationContext.sourceTexts.filter(
-        (entry) => entry.text === sourceText,
-      ),
-    ).toHaveLength(1);
+    expect(validationContext.sourceTexts).toEqual([]);
     const payload = z
-      .object({ additionalEvidence: z.array(projectedEvidenceSchema) })
+      .object({ citedEvidence: z.array(evidenceMetadataSchema) })
       .parse(validationContext.payload);
-    expect(payload.additionalEvidence).toEqual([
-      expect.objectContaining({
-        id: "head-source",
-        revision: "head",
-        sha: testSnapshot.headSha,
-        path: "src/a.ts",
-        startLine: 1,
-        endLine: 1,
-        truncated: false,
-      }),
-      expect.objectContaining({
-        id: "integration-source",
-        revision: "integration",
-        sha: testSnapshot.integration.treeSha,
-        path: "src/a.ts",
-        startLine: 1,
-        endLine: 1,
-        truncated: false,
-      }),
-    ]);
-    expect(payload.additionalEvidence[0]?.text).toEqual(
-      payload.additionalEvidence[1]?.text,
+    expect(payload.citedEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "head-source",
+          revision: "head",
+          sha: testSnapshot.headSha,
+          path: "src/a.ts",
+          startLine: 1,
+          endLine: 1,
+          truncated: false,
+        }),
+        expect.objectContaining({
+          id: "integration-source",
+          revision: "integration",
+          sha: testSnapshot.integration.treeSha,
+          path: "src/a.ts",
+          startLine: 1,
+          endLine: 1,
+          truncated: false,
+        }),
+      ]),
     );
   });
 
@@ -186,7 +188,7 @@ describe("review source context", () => {
     ).toBe(false);
   });
 
-  it("retains complete unreferenced validation evidence rather than selecting only candidate citations", async () => {
+  it("indexes unreferenced validation evidence without replaying its full source", async () => {
     const input = reviewTestInput();
     const requests: CapturedRequest[] = [];
     let read = false;
@@ -211,13 +213,19 @@ describe("review source context", () => {
       validation.messages.find((message) => message.role === "user"),
     );
     const payload = z
-      .object({ additionalEvidence: z.array(projectedEvidenceSchema) })
+      .object({
+        citedEvidence: z.array(evidenceMetadataSchema),
+        evidenceIndex: z.array(evidenceMetadataSchema),
+      })
       .parse(context.payload);
-    expect(payload.additionalEvidence.map((entry) => entry.id)).toEqual([
-      "head-source",
+    expect(payload.citedEvidence.map((entry) => entry.id)).toEqual([
+      testAnalysis().coverage[0]?.evidenceIds[0],
     ]);
+    expect(payload.evidenceIndex.map((entry) => entry.id)).toContain(
+      "head-source",
+    );
     expect(context.sourceTexts.some((entry) => entry.text === sourceText)).toBe(
-      true,
+      false,
     );
     expectReferencesResolved(validation.messages);
   });

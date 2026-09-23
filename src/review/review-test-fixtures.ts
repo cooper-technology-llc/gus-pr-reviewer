@@ -75,6 +75,7 @@ export function testFinding(
     suggestion: "Preserve the documented value or update all callers.",
     evidenceIds: [headEvidence().id],
     disposition: "blocking",
+    excerpts: [],
     ...overrides,
   };
 }

@@ -1,7 +1,9 @@
 import { Buffer } from "node:buffer";
 import type { GusConfig } from "../config/config-schema.js";
 import { GusError } from "../errors.js";
+import { formatReviewMarkdown } from "../reporting/format-review.js";
 import {
+  findHiddenStateComment,
   parseFindingMarker,
   parseReviewState,
   readReportIdentity,
@@ -9,6 +11,7 @@ import {
 } from "../reporting/review-state.js";
 import type { PublicationResult } from "../review/review-ports.js";
 import type { PriorReview } from "../review/review-schema.js";
+import { createReviewCheckRun, evidenceArtifactUrl } from "./check-run.js";
 import { requireCurrentRevision } from "./current-revision.js";
 import { publishFollowUpIssues } from "./follow-up-issues.js";
 import type {
@@ -24,6 +27,11 @@ import {
 } from "./prior-reviews.js";
 import { resolveEvidencedFindings } from "./resolve-findings.js";
 import { notifyPublication } from "./slack.js";
+
+const GITHUB_BODY_LIMIT = 65_000;
+/** Room for the details and evidence links added to the body at post time. */
+const LINKS_ALLOWANCE = 1_000;
+const SUPERSEDED_PREFIX = "Superseded by ";
 
 /** Publishes only the exact reviewed revision and reports confirmed external outcomes. */
 export async function publishReview(
@@ -49,7 +57,10 @@ export async function publishReview(
     input.review.snapshot.baseSha !== input.subject.baseSha
   )
     return stalePublication(result);
-  if (Buffer.byteLength(input.markdown, "utf8") > 65_000) {
+  if (
+    Buffer.byteLength(input.markdown, "utf8") >
+    GITHUB_BODY_LIMIT - LINKS_ALLOWANCE
+  ) {
     result.status = "partial";
     result.errors.push(
       "The complete review exceeds GitHub's comment size limit; no review was posted. Use the complete local report.",
@@ -58,33 +69,23 @@ export async function publishReview(
   }
 
   try {
-    const existing = await findIdenticalReview(input, reportIdentity);
+    const priorReviews = await trustedReviewRecords(
+      input.client,
+      input.subject.number,
+      input.config,
+    );
+    const existing = priorReviews.find((review) =>
+      isIdenticalReview(review, input, reportIdentity),
+    );
     await requireCurrentRevision(input.client, input.subject);
     if (existing) {
       result.status = "already-published";
       result.reviewId = existing.id;
       result.reviewUrl = existing.url;
     } else {
-      const comments = selectInlineComments(
-        input.review,
-        input.subject,
-        input.changedFiles,
-        input.config,
-      );
-      await requireCurrentRevision(input.client, input.subject);
-      try {
-        const posted = await input.client.createReview(input.subject.number, {
-          body: input.markdown,
-          commitId: input.subject.headSha,
-          comments,
-        });
-        result.reviewId = posted.id;
-        result.reviewUrl = posted.url;
-        result.inlinePosted = comments.length;
-      } catch {
-        const recovered = await recoverReview(input, reportIdentity, result);
-        if (!recovered) return finishPublication(input, result);
-      }
+      const posted = await postNewReview(input, reportIdentity, result);
+      if (!posted) return finishPublication(input, result);
+      await supersedePriorReviews(input, priorReviews, result);
     }
 
     if (
@@ -113,6 +114,93 @@ export async function publishReview(
     applyPublicationFailure(result, error);
   }
   return finishPublication(input, result);
+}
+
+/**
+ * Creates the Check Run first so the comment can link to it, then posts the review.
+ * Returns false when the review write was not confirmed.
+ */
+async function postNewReview(
+  input: PublishReviewInput,
+  reportIdentity: string,
+  result: PublicationResult,
+): Promise<boolean> {
+  const environment = input.environment ?? process.env;
+  const checkRun = await createReviewCheckRun({
+    client: input.client,
+    review: input.review,
+    headSha: input.subject.headSha,
+    config: input.config,
+    environment,
+    notices: result.notices,
+  });
+  if (checkRun.status === "skipped") result.notices.push(checkRun.notice);
+  const markdown = formatReviewMarkdown(
+    input.review,
+    input.subject,
+    input.config,
+    {
+      checkRunUrl: checkRun.status === "created" ? checkRun.url : null,
+      artifactUrl: evidenceArtifactUrl(environment),
+    },
+  );
+  const comments = selectInlineComments(
+    input.review,
+    input.subject,
+    input.changedFiles,
+    input.config,
+  );
+  await requireCurrentRevision(input.client, input.subject);
+  try {
+    const posted = await input.client.createReview(input.subject.number, {
+      body: markdown,
+      commitId: input.subject.headSha,
+      comments,
+    });
+    result.reviewId = posted.id;
+    result.reviewUrl = posted.url;
+    result.inlinePosted = comments.length;
+    return true;
+  } catch {
+    return recoverReview(input, reportIdentity, result);
+  }
+}
+
+/**
+ * Points every earlier Gus review on the PR at the new one. The hidden state comment is kept
+ * because reconciliation reads it. Failures are notices; the new review is already posted.
+ */
+async function supersedePriorReviews(
+  input: PublishReviewInput,
+  priorReviews: GitHubReviewRecord[],
+  result: PublicationResult,
+): Promise<void> {
+  const reviewUrl = result.reviewUrl;
+  if (!reviewUrl) return;
+  const sha7 = input.subject.headSha.slice(0, 7);
+  let failed = 0;
+  for (const prior of priorReviews) {
+    if (prior.id === result.reviewId || isSuperseded(prior.body)) continue;
+    const stateComment = findHiddenStateComment(prior.body);
+    if (!stateComment) continue;
+    try {
+      await input.client.updateReview(
+        input.subject.number,
+        prior.id,
+        `${SUPERSEDED_PREFIX}[this review](${reviewUrl}) at \`${sha7}\`.\n\n${stateComment}`,
+      );
+    } catch {
+      failed += 1;
+    }
+  }
+  if (failed > 0)
+    result.notices.push(
+      `Could not mark ${failed} earlier review${failed === 1 ? "" : "s"} as superseded; the new review was still posted.`,
+    );
+}
+
+function isSuperseded(body: string): boolean {
+  return body.startsWith(SUPERSEDED_PREFIX);
 }
 
 export interface FileReviewIssuesInput {
@@ -182,11 +270,18 @@ async function findIdenticalReview(
 ): Promise<GitHubReviewRecord | undefined> {
   return (
     await trustedReviewRecords(input.client, input.subject.number, input.config)
-  ).find(
-    (review) =>
-      readReportIdentity(review.body) === identity &&
-      parseReviewState(review.body)?.baseSha === input.subject.baseSha &&
-      review.commitId === input.subject.headSha,
+  ).find((review) => isIdenticalReview(review, input, identity));
+}
+
+function isIdenticalReview(
+  review: GitHubReviewRecord,
+  input: PublishReviewInput,
+  identity: string,
+): boolean {
+  return (
+    readReportIdentity(review.body) === identity &&
+    parseReviewState(review.body)?.baseSha === input.subject.baseSha &&
+    review.commitId === input.subject.headSha
   );
 }
 
@@ -235,6 +330,7 @@ function emptyPublication(publish: boolean): PublicationResult {
     threadsResolved: 0,
     slackSent: false,
     errors: [],
+    notices: [],
   };
 }
 

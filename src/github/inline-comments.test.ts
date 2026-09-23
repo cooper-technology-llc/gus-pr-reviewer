@@ -40,6 +40,7 @@ function reviewWithFinding(line = 1): ReviewResult {
       suggestion: "Preserve the existing value.",
       evidenceIds: ["e1"],
       disposition: "blocking",
+      excerpts: [],
     },
   ];
   return review;

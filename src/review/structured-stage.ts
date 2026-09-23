@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { z } from "zod";
 
 import type { ReviewStage } from "../config/config-schema.js";
@@ -16,6 +17,7 @@ import {
   unwrapReviewOutput,
 } from "./logic/review-dsl-lexer.js";
 import { parseReviewDsl } from "./logic/review-dsl-parser.js";
+import { repairReviewDsl } from "./logic/review-dsl-repair.js";
 import { addEvidence } from "./logic/review-evidence.js";
 import { ReviewBudget } from "./review-budget.js";
 import type {
@@ -46,6 +48,7 @@ interface StageInput<T> {
   state: ReviewEvidenceState;
   validate?: (result: T) => string[];
   maxOutputTokens?: number;
+  reserveTokens?: number | (() => number);
 }
 
 export async function runStructuredStage<T>(
@@ -77,6 +80,9 @@ export async function runStructuredStage<T>(
         tools,
         options.maxOutputTokens ?? input.config.review.maxOutputTokens,
         { stage, model, trigger, policyChars },
+        typeof options.reserveTokens === "function"
+          ? options.reserveTokens()
+          : options.reserveTokens,
       );
     } catch (error) {
       if (
@@ -156,7 +162,12 @@ export async function runStructuredStage<T>(
       trigger = "tool-results";
       continue;
     }
-    const parsed = parseStageContent(completion.content, options.schema, stage);
+    const parsed = parseStageContent(
+      completion.content,
+      options.schema,
+      stage,
+      state,
+    );
     const failures = parsed.success
       ? (options.validate?.(parsed.value) ?? [])
       : [parsed.error];
@@ -195,24 +206,19 @@ async function runCompactSubmit<T>(
       "Compact submit is only available after investigation or validation tools.",
     );
   }
-  const content = buildCompactSubmitContent(
-    options.content,
+  const requestedOutput =
+    options.maxOutputTokens ?? input.config.review.maxOutputTokens;
+  const reservedTokens =
+    typeof options.reserveTokens === "function"
+      ? options.reserveTokens()
+      : (options.reserveTokens ?? 0);
+  const messages = buildCompactSubmitMessages(
+    options,
     investigationMessages,
-    input.config.review,
+    budget,
+    requestedOutput,
+    reservedTokens,
   );
-  const context = createReviewContext();
-  const messages: ModelMessage[] = [
-    { role: "system", content: input.prompts[stage] },
-    {
-      role: "system",
-      content: [
-        reviewDslContract(stage),
-        "This is a compact submit turn. Output only REVIEW v1 DSL. Do not call tools. Do not use JSON.",
-        "The host already has seed patches and recorded inspections. Omit COVERAGE unless you must downgrade a file.",
-      ].join("\n\n"),
-    },
-    { role: "user", content: context.projectInput(content) },
-  ];
   let corrections = 0;
   let trigger: ReviewModelCallContext["trigger"] = "initial";
   while (true) {
@@ -221,35 +227,65 @@ async function runCompactSubmit<T>(
     const maxOutputTokens = budget.beginModel(
       messages,
       [],
-      options.maxOutputTokens ?? input.config.review.maxOutputTokens,
+      requestedOutput,
       { stage, model, trigger, policyChars: 0 },
+      reservedTokens,
     );
     input.onProgress?.({
       stage,
       message: "Writing the compact REVIEW v1 submit.",
     });
-    const completion = await budget.withinDeadline((signal) =>
-      input.model.complete({
-        stage,
-        model,
-        messages,
-        tools: [],
-        maxOutputTokens,
-        deadline: budget.deadline,
-        signal,
-        jsonMode: false,
-        ...(modelOverride?.reasoningEffort === undefined
-          ? {}
-          : { reasoningEffort: modelOverride.reasoningEffort }),
-      }),
-    );
+    let completion: ModelCompletion;
+    try {
+      completion = await budget.withinDeadline((signal) =>
+        input.model.complete({
+          stage,
+          model,
+          messages,
+          tools: [],
+          maxOutputTokens,
+          deadline: budget.deadline,
+          signal,
+          jsonMode: false,
+          ...(modelOverride?.reasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: modelOverride.reasoningEffort }),
+        }),
+      );
+    } catch (error) {
+      budget.recordModelFailure(error);
+      throw error;
+    }
     budget.recordCompletion(completion);
+    if (completion.outputTokens > maxOutputTokens)
+      throw new GusError(
+        "PROVIDER_PROTOCOL",
+        "The provider reported output beyond the requested compact completion limit.",
+      );
     if (completion.toolCalls.length > 0)
       throw new GusError(
         "PROVIDER_PROTOCOL",
         "The compact submit turn requested tools that are not available.",
       );
-    const parsed = parseStageContent(completion.content, options.schema, stage);
+    if (completion.finishReason !== "stop") {
+      corrections += 1;
+      requestCorrection(
+        messages,
+        completion.content,
+        [
+          "Compact completion was truncated, filtered, or unfinished. Return a complete output ending with END within the requested limit.",
+        ],
+        corrections,
+      );
+      trigger = "correction";
+      continue;
+    }
+    const parsed = parseStageContent(
+      completion.content,
+      options.schema,
+      stage,
+      options.state,
+    );
     const failures = parsed.success
       ? (options.validate?.(parsed.value) ?? [])
       : [parsed.error];
@@ -257,6 +293,76 @@ async function runCompactSubmit<T>(
     corrections += 1;
     requestCorrection(messages, completion.content, failures, corrections);
     trigger = "correction";
+  }
+}
+
+function buildCompactSubmitMessages<T>(
+  options: StageInput<T>,
+  investigationMessages: readonly ModelMessage[],
+  budget: ReviewBudget,
+  requestedOutput: number,
+  reservedTokens: number,
+): ModelMessage[] {
+  const { input, stage } = options;
+  const systemMessages: ModelMessage[] = [
+    { role: "system", content: input.prompts[stage] },
+    {
+      role: "system",
+      content: [
+        stageOutputContract(options.schema, stage),
+        "This is a compact submit turn. Output only REVIEW v1 DSL. Do not call tools. Do not use JSON.",
+        "The host already has seed patches and recorded inspections. Omit COVERAGE unless you must downgrade a file.",
+      ].join("\n\n"),
+    },
+  ];
+  let maxSubmitContextChars = Math.min(
+    input.config.review.maxSubmitContextChars,
+    input.config.review.maxInputChars,
+  );
+  for (;;) {
+    const content = buildCompactSubmitContent(
+      options.content,
+      investigationMessages,
+      {
+        ...input.config.review,
+        maxSubmitContextChars,
+        maxSubmitSeedChars: Math.min(
+          input.config.review.maxSubmitSeedChars,
+          maxSubmitContextChars,
+        ),
+      },
+    );
+    const context = createReviewContext();
+    const messages = [
+      ...systemMessages,
+      { role: "user" as const, content: context.projectInput(content) },
+    ];
+    const serializedChars = JSON.stringify({ messages, tools: [] }).length;
+    const serializedBytes = Buffer.byteLength(
+      JSON.stringify({ messages, tools: [] }),
+      "utf8",
+    );
+    const availableBytes = budget.availableModelInputBytes(
+      requestedOutput,
+      reservedTokens,
+      messages.length,
+    );
+    if (
+      serializedChars <= input.config.review.maxInputChars &&
+      serializedBytes <= availableBytes
+    )
+      return messages;
+    const overflow = Math.max(
+      serializedChars - input.config.review.maxInputChars,
+      serializedBytes - availableBytes,
+    );
+    const reducedLimit = maxSubmitContextChars - overflow;
+    if (reducedLimit >= maxSubmitContextChars || reducedLimit <= 0)
+      throw new GusError(
+        "BUDGET_EXCEEDED",
+        "The compact submit cannot fit its host protocol within maxInputChars.",
+      );
+    maxSubmitContextChars = reducedLimit;
   }
 }
 
@@ -279,7 +385,7 @@ function stageOutputContract<T>(
   }
   if (stage === "validate")
     contract.push(
-      "Give one CANDIDATE record for every investigation finding ID. Confirmed candidates must remain findings; rejected candidates need current evidence and a reason; unverified candidates keep the review incomplete. Never silently drop an investigation candidate.",
+      "Give one CANDIDATE record for every investigation finding ID. Confirmed candidates must remain findings; rejected candidates need current evidence and a reason; unverified candidates are reported as open limitations. Never silently drop an investigation candidate. The host re-reads every cited evidence range and pages truncated patches itself; read only what your judgment needs.",
     );
   if (stage === "report")
     contract.push(
@@ -296,6 +402,7 @@ function parseStageContent<T>(
   content: string,
   schema: z.ZodType<T>,
   stage: ReviewStage,
+  state: ReviewEvidenceState,
 ): { success: true; value: T } | { success: false; error: string } {
   let raw: unknown;
   try {
@@ -303,7 +410,7 @@ function parseStageContent<T>(
     raw =
       stage === "triage" || document.startsWith("{") || document.startsWith("[")
         ? JSON.parse(document)
-        : parseReviewDsl(document, stage);
+        : parseRepairedReviewDsl(document, stage, state);
   } catch (error) {
     return {
       success: false,
@@ -331,26 +438,42 @@ function parseStageContent<T>(
   return { success: true, value: parsed.data };
 }
 
+/** Repairs trivial DSL slips host-side so they never spend a correction turn. */
+function parseRepairedReviewDsl(
+  document: string,
+  stage: Exclude<ReviewStage, "triage">,
+  state: ReviewEvidenceState,
+): unknown {
+  const repaired = repairReviewDsl(document);
+  state.notices.push(...repaired.repairs);
+  return parseReviewDsl(repaired.document, stage);
+}
+
+const maxCorrections = 3;
+
 function requestCorrection(
   messages: ModelMessage[],
   content: string,
   errors: string[],
   corrections: number,
 ): void {
-  if (corrections > 2)
+  if (corrections > maxCorrections)
     throw new GusError(
       "PROVIDER_PROTOCOL",
       "The stage could not produce a complete, evidence-valid result after bounded corrections.",
     );
   messages.push({ role: "assistant", content });
-  messages.push({
-    role: "user",
-    content: JSON.stringify({
-      protocolCorrection: errors,
-      instruction:
-        "Correct the REVIEW v1 DSL or obtain missing evidence with the available tools. Keep unresolved concerns explicit; never invent citations to satisfy the schema.",
-    }),
-  });
+  messages.push({ role: "user", content: correctionMessage(errors) });
+}
+
+/** Carries each failure verbatim, one per line, followed by the single instruction. */
+export function correctionMessage(errors: string[]): string {
+  return [
+    "Protocol correction. The host rejected your previous output for these reasons:",
+    ...errors.map((error) => `- ${error}`),
+    "",
+    "Resend the complete corrected document ending with END. Keep unresolved concerns explicit as questions or unverified candidates; never invent evidence IDs to satisfy the host.",
+  ].join("\n");
 }
 
 async function inspectWithTool(
@@ -396,17 +519,36 @@ async function inspectWithTool(
     });
     return;
   }
-  addEvidence(state.evidence, execution.evidence, input.repository.snapshot);
-  if (JSON.stringify(execution).length > input.config.review.maxToolOutputChars)
-    throw new GusError(
-      "BUDGET_EXCEEDED",
-      "A repository tool response exceeded maxToolOutputChars. Its evidence was not silently clipped.",
-    );
-  for (const path of execution.inspectedPaths) state.inspectedPaths.add(path);
-  state.notices.push(...execution.warnings);
+  recordToolExecution(input, state, execution);
   messages.push({
     role: "tool",
     toolCallId: call.id,
-    content: context.projectTool(execution),
+    content: context.projectTool(
+      clipToolContent(execution, input.config.review.maxToolOutputChars),
+    ),
   });
+}
+
+/** Records a repository read's evidence, completed inspections, and warnings; shared by model and host reads. */
+export function recordToolExecution(
+  input: ReviewInput,
+  state: ReviewEvidenceState,
+  execution: ToolExecution,
+): void {
+  addEvidence(state.evidence, execution.evidence, input.repository.snapshot);
+  for (const path of execution.inspectedPaths) state.inspectedPaths.add(path);
+  state.notices.push(...execution.warnings);
+}
+
+/** The executor clips its own output; this guard keeps an oversized result from ever failing the stage. */
+function clipToolContent(
+  execution: ToolExecution,
+  maxChars: number,
+): ToolExecution {
+  if (execution.content.length <= maxChars) return execution;
+  const droppedChars = execution.content.length - maxChars;
+  return {
+    ...execution,
+    content: `${execution.content.slice(0, maxChars)}\n… [truncated ${droppedChars} chars; request a narrower range]`,
+  };
 }

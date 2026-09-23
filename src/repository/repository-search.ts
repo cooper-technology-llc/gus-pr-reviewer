@@ -9,11 +9,30 @@ import type { ReviewEvidence } from "../review/review-schema.js";
 import { identifyEvidence, toolResult } from "./repository-evidence.js";
 import type { searchArguments } from "./repository-tool-definitions.js";
 
+/** Matched line text is trimmed to this many characters; read_file gives full context. */
+const MATCH_TEXT_LIMIT = 200;
+
 interface SearchMatch {
   path: string;
   line: number;
   text: string;
   evidenceId: string;
+}
+
+/** Counts remaining matches in an already-fetched line window without advancing the resume cursor. */
+function countMatches(
+  lines: string[],
+  fromOffset: number,
+  needle: string,
+  caseSensitive: boolean,
+): number {
+  let count = 0;
+  for (let index = fromOffset; index < lines.length; index += 1) {
+    const text = lines[index] ?? "";
+    if ((caseSensitive ? text : text.toLowerCase()).includes(needle))
+      count += 1;
+  }
+  return count;
 }
 
 /** Returns a resumable literal search; skipped or unscanned source is always disclosed. */
@@ -39,6 +58,7 @@ export async function searchRepository(
   let nextLine = request.startLine;
   let filesRead = 0;
   let contentSize = 1000;
+  let moreHits = 0;
   let stop = false;
   while (fileIndex < files.length && filesRead < request.maxFiles && !stop) {
     const path = files[fileIndex];
@@ -61,17 +81,35 @@ export async function searchRepository(
           !(request.caseSensitive ? text : text.toLowerCase()).includes(needle)
         )
           continue;
+        if (matches.length >= request.maxMatches) {
+          // Resume exactly here next call, the same as a content-budget
+          // stop; report how many more hits already sit in this fetched
+          // window without scanning ahead of the cursor we are returning.
+          nextLine = line;
+          stop = true;
+          moreHits = countMatches(lines, offset, needle, request.caseSensitive);
+          break;
+        }
+        const trimmedText =
+          text.length > MATCH_TEXT_LIMIT
+            ? text.slice(0, MATCH_TEXT_LIMIT)
+            : text;
         const record = identifyEvidence({
           path,
           revision: file.revision,
           sha: file.sha,
           startLine: line,
           endLine: line,
-          text,
+          text: trimmedText,
           kind: "search",
-          truncated: false,
+          truncated: text.length > MATCH_TEXT_LIMIT,
         });
-        const match: SearchMatch = { path, line, text, evidenceId: record.id };
+        const match: SearchMatch = {
+          path,
+          line,
+          text: trimmedText,
+          evidenceId: record.id,
+        };
         const matchSize = JSON.stringify(match).length + 1;
         if (contentSize + matchSize > maxChars) {
           nextLine = line;
@@ -84,11 +122,8 @@ export async function searchRepository(
         matches.push(match);
         evidence.push(record);
         contentSize += matchSize;
-        if (matches.length >= request.maxMatches) {
-          stop = true;
-          break;
-        }
       }
+      if (matches.length >= request.maxMatches) stop = true;
       if (nextLine > file.totalLines || file.totalLines === 0) {
         fileIndex += 1;
         nextLine = 1;
@@ -112,6 +147,7 @@ export async function searchRepository(
       query: request.query,
       revision: request.revision,
       matches,
+      moreHits,
       filesMatchedPattern: files.length,
       filesRead,
       truncated,

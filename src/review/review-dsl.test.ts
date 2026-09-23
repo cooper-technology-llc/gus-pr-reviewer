@@ -92,22 +92,29 @@ describe("DSL review submissions", () => {
           corrections.push(request.messages.at(-1)?.content ?? "");
         return {
           ...jsonCompletion(null),
-          content: reviewDsl(false).replace("\nEND", ""),
+          content: reviewDsl(false).replace(
+            "FINDING | candidate-1 | major | src/a.ts | 1 | RIGHT | blocking",
+            "FINDING | candidate-1 | major | src/a.ts",
+          ),
         };
       },
     };
     const result = await reviewChange(input);
-    expect(investigationCalls).toBe(3);
-    expect(corrections).toHaveLength(2);
+    expect(investigationCalls).toBe(4);
+    expect(corrections).toHaveLength(3);
     expect(
-      corrections.every((content) => content.includes("Missing required END")),
+      corrections.every(
+        (content) =>
+          content.startsWith("Protocol correction.") &&
+          content.includes("FINDING | candidate-1 | major | src/a.ts"),
+      ),
     ).toBe(true);
     expect(result).toMatchObject({
       verdict: "incomplete",
       findings: [],
       architecture: null,
       tests: null,
-      usage: { requests: 4 },
+      usage: { requests: 5 },
     });
   });
 
@@ -210,6 +217,35 @@ describe("DSL review submissions", () => {
     expect(result.verdict).toBe("changes-requested");
     expect(result.findings).toHaveLength(1);
     expect(result.personality).toBe("");
+  });
+});
+
+describe("DSL validation outcomes", () => {
+  it("ends ready with an unresolved question listed instead of withholding the verdict", async () => {
+    const input = reviewTestInput();
+    const questionDsl = `REVIEW v1
+SUMMARY
+The change updates the exported value.
+RISK | low
+ARCHITECTURE | A
+The change stays within its existing module.
+TESTS | B
+The assessment is static.
+QUESTION
+Were downstream callers told about the new value?
+END`;
+    input.model = {
+      complete: async (request) =>
+        request.stage === "validate"
+          ? { ...jsonCompletion(null), content: questionDsl }
+          : answerStage(request),
+    };
+    const result = await reviewChange(input);
+    expect(result.verdict).toBe("ready");
+    expect(result.questions).toEqual([
+      "Were downstream callers told about the new value?",
+    ]);
+    expect(result.limitations).toEqual([]);
   });
 });
 

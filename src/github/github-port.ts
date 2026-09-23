@@ -1,4 +1,5 @@
 import type { GusConfig } from "../config/config-schema.js";
+import type { CheckRunOutput } from "../reporting/format-check-run.js";
 import type { ReviewSubject } from "../review/review-ports.js";
 import type {
   ChangedFile,
@@ -46,6 +47,13 @@ export interface GitHubIssue {
   body: string;
   url: string;
 }
+export interface GitHubCheckRunInput {
+  name: string;
+  headSha: string;
+  conclusion: "success" | "failure" | "neutral";
+  detailsUrl?: string;
+  output: CheckRunOutput;
+}
 export interface GitHubClient {
   getRepository(): Promise<GitHubRepository>;
   getPullRequest(number: number): Promise<GitHubPullRequest>;
@@ -72,6 +80,11 @@ export interface GitHubClient {
       }>;
     },
   ): Promise<{ id: number; url: string }>;
+  /** Replaces a submitted review's body (used to mark an earlier review superseded). */
+  updateReview(number: number, reviewId: number, body: string): Promise<void>;
+  createCheckRun(
+    input: GitHubCheckRunInput,
+  ): Promise<{ id: number; url: string }>;
   createIssue(input: {
     title: string;
     body: string;
@@ -96,6 +109,8 @@ export interface PublishReviewInput {
   config: GusConfig;
   publish: boolean;
   requestedIssues?: boolean;
+  /** Actions run variables (GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID); defaults to process.env. */
+  environment?: Record<string, string | undefined>;
   slackWebhook?: string;
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;

@@ -136,6 +136,7 @@ async function runLocalReview(
         threadsResolved: 0,
         slackSent: false,
         errors: [],
+        notices: [],
       },
     };
   } finally {

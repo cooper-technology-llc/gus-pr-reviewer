@@ -39,7 +39,7 @@ function priorReview(): PriorReview {
 }
 
 describe("current review reconciliation", () => {
-  it("does not copy old blockers when a history rewrite prevents revalidation", async () => {
+  it("does not copy old blockers when a history rewrite prevents revalidation, and still reaches a verdict", async () => {
     const input = reviewTestInput({ priorReviews: [priorReview()] });
     input.repository.snapshot = {
       ...input.repository.snapshot,
@@ -58,12 +58,10 @@ describe("current review reconciliation", () => {
       complete: async (request) => answerStage(request, analysis),
     };
     const result = await reviewChange(input);
-    expect(result).toMatchObject({
-      verdict: "incomplete",
-      findings: [],
-      architecture: null,
-    });
+    // An unverified prior finding is a reconciliation fact, not a verdict.
+    expect(result).toMatchObject({ verdict: "ready", findings: [] });
     expect(result.reconciliations[0]?.status).toBe("unverified");
+    expect(result.limitations).toEqual([]);
   });
 
   it("rejects prior resolution based only on a stale evidence identifier", async () => {
@@ -124,7 +122,7 @@ describe("current review reconciliation", () => {
     });
   });
 
-  it("keeps a clean-looking assessment incomplete when required integration is unavailable", async () => {
+  it("reports unavailable required integration as a limitation without withholding the verdict", async () => {
     const input = reviewTestInput();
     input.repository.snapshot = {
       ...input.repository.snapshot,
@@ -135,11 +133,11 @@ describe("current review reconciliation", () => {
         treeSha: null,
       },
     };
-    expect(await reviewChange(input)).toMatchObject({
-      verdict: "incomplete",
-      architecture: null,
-      tests: null,
-    });
+    const result = await reviewChange(input);
+    expect(result.verdict).toBe("ready");
+    expect(result.limitations).toContain(
+      "Current target or history changes require a prospective integration snapshot that was unavailable.",
+    );
   });
 
   it("accepts removed-line evidence with fresh caller evidence proving the current consequence", async () => {
@@ -155,7 +153,7 @@ describe("current review reconciliation", () => {
       complete: async (request) => {
         if (request.stage === "investigate" && investigations++ === 0)
           return toolCompletion("caller", "read_file", "src/caller.ts");
-        if (request.stage === "validate")
+        if (request.stage === "validate") {
           return jsonCompletion({
             ...analysis,
             candidateResolutions: [
@@ -168,11 +166,31 @@ describe("current review reconciliation", () => {
               },
             ],
           });
+        }
         return answerStage(request, analysis);
       },
     };
-    input.tools.execute = async () =>
-      fileExecution("caller-proof", "src/caller.ts", "consume(value, 1);");
+    input.tools.execute = async (_name, argumentsValue) => {
+      const path =
+        typeof argumentsValue === "object" &&
+        argumentsValue !== null &&
+        "path" in argumentsValue &&
+        typeof argumentsValue.path === "string"
+          ? argumentsValue.path
+          : "src/caller.ts";
+      if (path === "src/a.ts")
+        return {
+          content: "Read removed parent source.",
+          inspectedPaths: [path],
+          warnings: [],
+          evidence: [parentEvidence()],
+        };
+      return fileExecution(
+        "caller-proof",
+        "src/caller.ts",
+        "consume(value, 1);",
+      );
+    };
     const result = await reviewChange(input);
     expect(result.verdict).toBe("changes-requested");
     expect(result.findings[0]?.side).toBe("LEFT");

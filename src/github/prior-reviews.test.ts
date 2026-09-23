@@ -66,6 +66,7 @@ describe("trusted prior reviews", () => {
         suggestion: "Persist it.",
         evidenceIds: ["e1"],
         disposition: "blocking",
+        excerpts: [],
       },
     ];
     const client = makeClient({

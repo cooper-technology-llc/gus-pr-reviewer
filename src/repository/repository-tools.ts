@@ -10,6 +10,7 @@ import type {
 } from "../review/review-ports.js";
 import {
   createInspectionCoverage,
+  seededPatchRows,
   type InspectionCoverage,
 } from "./logic/inspection-coverage.js";
 import { fitSourcePages } from "./logic/fit-source-pages.js";
@@ -156,9 +157,10 @@ async function readFileTool(
   const pages = fitSourcePages([file], (candidates) => {
     const candidate = candidates[0] ?? file;
     const { payload, evidence } = filePage(candidate);
-    return (
-      toolResult(payload, [evidence], [candidate.path], [], maxChars)
-        .content === JSON.stringify(payload)
+    return isUnclipped(
+      toolResult(payload, [evidence], [candidate.path], [], maxChars),
+      payload,
+      1,
     );
   });
   const bounded = pages?.[0] ?? file;
@@ -167,7 +169,7 @@ async function readFileTool(
   result.inspectedPaths = [];
   if (
     pages !== null &&
-    result.content === JSON.stringify(payload) &&
+    isUnclipped(result, payload, 1) &&
     recordSourceCoverage(repository, bounded, coverage)
   )
     result.inspectedPaths.push(file.path);
@@ -207,9 +209,10 @@ async function readFilesTool(
   const reservedPaths = [...new Set(files.map((file) => file.path))];
   const pages = fitSourcePages(files, (candidates) => {
     const { payload, evidence } = filePages(candidates, warnings);
-    return (
-      toolResult(payload, evidence, reservedPaths, warnings, maxChars)
-        .content === JSON.stringify(payload)
+    return isUnclipped(
+      toolResult(payload, evidence, reservedPaths, warnings, maxChars),
+      payload,
+      candidates.length,
     );
   });
   const { payload, evidence } = filePages(pages ?? files, warnings);
@@ -221,7 +224,7 @@ async function readFilesTool(
     maxChars,
   );
   execution.inspectedPaths = [];
-  if (pages !== null && execution.content === JSON.stringify(payload)) {
+  if (pages !== null && isUnclipped(execution, payload, pages.length)) {
     for (const file of pages) {
       if (
         recordSourceCoverage(repository, file, coverage) &&
@@ -285,64 +288,81 @@ async function readDiffTool(
       "This file is not in the contribution diff.",
     );
   const rows = sourceLines(diff.text);
+  const snapshot = `diff:${repository.snapshot.comparisonBaseSha}:${repository.snapshot.headSha}`;
+  const seedRows = file.excluded ? 0 : seededPatchRows(file.patch, diff.text);
+  if (seedRows > 0)
+    coverage.record({
+      path: file.path,
+      snapshot,
+      startLine: 1,
+      endLine: seedRows,
+      totalLines: diff.totalLines,
+    });
   let selected = rows.slice(
     request.startLine - 1,
     request.startLine - 1 + request.lineCount,
   );
-  while (
-    selected.length > 0 &&
-    JSON.stringify(selected.join("\n")).length > maxChars / 2
-  )
-    selected = selected.slice(0, -1);
-  if (selected.length === 0 && request.startLine <= rows.length)
-    throw new GusError(
-      "BUDGET_EXCEEDED",
-      "A patch row exceeds the tool output limit; no partial row was returned.",
+  for (;;) {
+    const truncated = request.startLine - 1 + selected.length < rows.length;
+    const evidence = diffEvidence(
+      diff.text,
+      file,
+      repository.snapshot,
+      request.startLine,
+      selected.length,
+      truncated,
     );
-  const truncated = request.startLine - 1 + selected.length < rows.length;
-  const evidence = diffEvidence(
-    diff.text,
-    file,
-    repository.snapshot,
-    request.startLine,
-    selected.length,
-    truncated,
-  );
-  const references = evidence.map(
-    ({ id, path, revision, sha, startLine, endLine }) => ({
-      id,
-      path,
-      revision,
-      sha,
-      startLine,
-      endLine,
-    }),
-  );
-  const payload = {
-    path: file.path,
-    patch: selected.join("\n"),
-    patchStartLine: request.startLine,
-    totalPatchLines: diff.totalLines,
-    truncated,
-    nextLine: truncated ? request.startLine + selected.length : null,
-    evidence: references,
-    explanation:
-      "Patch rows are pagination coordinates. Cite source line ranges from the evidence records, with parent for LEFT and head for RIGHT.",
-  };
-  const result = toolResult(payload, evidence, [file.path], [], maxChars);
-  result.inspectedPaths = [];
-  if (
-    result.content === JSON.stringify(payload) &&
-    coverage.record({
+    const references = evidence.map(
+      ({ id, path, revision, sha, startLine, endLine }) => ({
+        id,
+        path,
+        revision,
+        sha,
+        startLine,
+        endLine,
+      }),
+    );
+    const payload = {
       path: file.path,
-      snapshot: `diff:${repository.snapshot.comparisonBaseSha}:${repository.snapshot.headSha}`,
-      startLine: request.startLine,
-      endLine: request.startLine + selected.length - 1,
-      totalLines: diff.totalLines,
-    })
-  )
-    result.inspectedPaths.push(file.path);
-  return result;
+      patch: selected.join("\n"),
+      patchStartLine: request.startLine,
+      totalPatchLines: diff.totalLines,
+      truncated,
+      nextLine: truncated ? request.startLine + selected.length : null,
+      evidence: references,
+      explanation:
+        "Patch rows are pagination coordinates. Cite source line ranges from the evidence records, with parent for LEFT and head for RIGHT.",
+    };
+    const result = toolResult(payload, evidence, [file.path], [], maxChars);
+    result.inspectedPaths = [];
+    if (isUnclipped(result, payload, evidence.length)) {
+      if (
+        coverage.record({
+          path: file.path,
+          snapshot,
+          startLine: request.startLine,
+          endLine: request.startLine + selected.length - 1,
+          totalLines: diff.totalLines,
+        })
+      )
+        result.inspectedPaths.push(file.path);
+      return result;
+    }
+    if (selected.length <= 1) return result;
+    selected = selected.slice(0, Math.max(1, Math.floor(selected.length / 2)));
+  }
+}
+
+/** True only when a tool result carries the exact requested content and its full evidence, none of it dropped to fit the output budget. */
+function isUnclipped(
+  result: ToolExecution,
+  payload: unknown,
+  expectedEvidenceCount: number,
+): boolean {
+  return (
+    result.content === JSON.stringify(payload) &&
+    result.evidence.length === expectedEvidenceCount
+  );
 }
 
 function recordSourceCoverage(

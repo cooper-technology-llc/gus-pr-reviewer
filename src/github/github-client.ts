@@ -2,12 +2,14 @@ import type { z } from "zod";
 import { GusError } from "../errors.js";
 import {
   branchSchema,
+  createdCheckRunSchema,
   createdReviewSchema,
   issueSchema,
   permissionSchema,
   pullRequestSchema,
   repositorySchema,
   reviewRecordSchema,
+  updatedReviewSchema,
   userSchema,
 } from "./github-api-schemas.js";
 import type {
@@ -187,6 +189,30 @@ export function createGitHubClient(options: GitHubClientOptions): GitHubClient {
         },
       );
       return { id: review.id, url: review.html_url };
+    },
+    async updateReview(number, reviewId, body) {
+      await transport.request(
+        "PUT",
+        `${repositoryPath}/pulls/${positiveNumber(number)}/reviews/${positiveNumber(reviewId)}`,
+        updatedReviewSchema,
+        { body },
+      );
+    },
+    async createCheckRun(input) {
+      const checkRun = await transport.request(
+        "POST",
+        `${repositoryPath}/check-runs`,
+        createdCheckRunSchema,
+        {
+          name: input.name,
+          head_sha: input.headSha,
+          status: "completed",
+          conclusion: input.conclusion,
+          ...(input.detailsUrl ? { details_url: input.detailsUrl } : {}),
+          output: input.output,
+        },
+      );
+      return { id: checkRun.id, url: checkRun.html_url };
     },
     async createIssue(input) {
       const issue = await transport.request(

@@ -17,6 +17,7 @@ describe("publication notifications", () => {
       threadsResolved: 0,
       slackSent: false,
       errors: [],
+      notices: [],
     };
     await notifyPublication({
       subject: makePullRequest(),
@@ -46,6 +47,7 @@ describe("publication notifications", () => {
       threadsResolved: 0,
       slackSent: false,
       errors: ["safe failure"],
+      notices: [],
     };
     await notifyPublication({
       subject: { ...makePullRequest(), title: "<!channel> @here a finding" },

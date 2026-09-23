@@ -26,6 +26,9 @@ export function reviewDslContract(
         ? "Use CANDIDATE | id | confirmed/rejected/unverified followed by its reason and EVIDENCE line for every investigation finding ID. Confirmed candidates must remain findings; rejection requires current evidence; unverified keeps the assessment incomplete."
         : "CANDIDATE records are reserved for the validation stage and must not appear here.",
     );
+    rules.push(
+      `Worked example (values are illustrative; cite real evidence IDs):\n${assessmentWorkedExample}`,
+    );
   }
   return rules.join("\n\n");
 }
@@ -73,3 +76,22 @@ EVIDENCE | actual-host-evidence-id
 END
 
 The example uses alternatives and placeholders to describe syntax. Choose one enum value and cite actual supplied evidence IDs. Omit optional records when the list is empty.`;
+
+/** One concrete, valid assessment; the parser tests accept it verbatim so prompt and parser cannot drift. */
+export const assessmentWorkedExample = `REVIEW v1
+SUMMARY
+The retry helper now stops after a fixed number of attempts.
+RISK | medium
+ARCHITECTURE | none
+TESTS | none
+FINDING | finding-1 | major | src/retry.ts | 42 | RIGHT | blocking
+TITLE
+Attempt counter resets on every call
+TRIGGER
+A caller invokes retry() again after the first failure.
+IMPACT
+The attempt limit never applies, so a failing request retries forever.
+FIX
+Keep the attempt counter outside the per-call closure.
+EVIDENCE | diff:0123abc:src%2Fretry.ts:38-46:example
+END`;

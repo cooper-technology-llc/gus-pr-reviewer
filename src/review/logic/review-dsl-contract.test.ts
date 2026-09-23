@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { reviewChange } from "../review-change.js";
 import type { ModelRequest } from "../review-ports.js";
 import {
+  assessmentWorkedExample,
+  reviewDslContract,
+} from "./review-dsl-contract.js";
+import {
   answerStage,
   fileExecution,
   headEvidence,
@@ -136,5 +140,19 @@ describe("DSL stage protocol", () => {
       tests: null,
       findings: [],
     });
+  });
+
+  it("ships one concrete worked example after the grammar for assessment stages only", () => {
+    for (const stage of ["investigate", "validate"] as const) {
+      const contract = reviewDslContract(stage);
+      expect(contract).toContain(
+        `Worked example (values are illustrative; cite real evidence IDs):\n${assessmentWorkedExample}`,
+      );
+      expect(
+        contract.indexOf("FINDING | id | critical/major/minor"),
+      ).toBeLessThan(contract.indexOf("Worked example"));
+    }
+    expect(reviewDslContract("report")).not.toContain("Worked example");
+    expect(reviewDslContract("personality")).not.toContain("Worked example");
   });
 });

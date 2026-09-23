@@ -66,6 +66,14 @@ export function makeReview(): ReviewResult {
         reason: "Read changed behavior.",
       },
     ],
+    coverageSummary: {
+      status: "full",
+      inspected: 1,
+      partial: 0,
+      unreviewed: 0,
+      excluded: 0,
+      notApplicable: 0,
+    },
     evidence: [
       {
         id: "e1",
@@ -124,6 +132,11 @@ export function makeClient(
       url: "https://github.com/acme/widgets/issues/2",
     }),
     resolveThread: async () => undefined,
+    updateReview: async () => undefined,
+    createCheckRun: async () => ({
+      id: 11,
+      url: "https://github.com/acme/widgets/runs/11",
+    }),
     ...overrides,
   };
 }

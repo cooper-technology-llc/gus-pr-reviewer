@@ -15,11 +15,20 @@ export function parseReviewDsl(
   const document = readReviewDsl(content);
   const expectedHeader = stage === "personality" ? "PERSONALITY" : "REVIEW";
   if (document.header !== expectedHeader)
-    throw new ReviewDslError(`${stage} requires ${expectedHeader} v1.`);
+    throw new ReviewDslError(
+      `${stage} requires ${expectedHeader} v1.`,
+      1,
+      `${document.header} v1`,
+    );
   if (stage === "report" || stage === "personality") {
     const marker = stage === "report" ? "SUMMARY" : "TAKE";
-    if (document.records.length !== 1)
-      throw new ReviewDslError(`${stage} accepts only one ${marker} record.`);
+    const extra = document.records[1];
+    if (extra !== undefined)
+      throw new ReviewDslError(
+        `${stage} accepts only one ${marker} record.`,
+        extra.line,
+        extra.text,
+      );
     const record = expectRecord(document.records, 0, marker);
     requireFields(record, 0);
     return { [stage === "report" ? "summary" : "text"]: requiredBody(record) };
@@ -93,6 +102,7 @@ function parseAssessment(
           throw new ReviewDslError(
             "CANDIDATE records are available only during validation.",
             record.line,
+            record.text,
           );
         }
         requireFields(record, 2);
@@ -111,6 +121,7 @@ function parseAssessment(
         throw new ReviewDslError(
           `Unexpected ${record.marker} record in an assessment.`,
           record.line,
+          record.text,
         );
     }
   }
@@ -134,6 +145,7 @@ function parseFinding(
     throw new ReviewDslError(
       "FINDING line must be a positive integer.",
       record.line,
+      record.text,
     );
   }
   const textSections = ["TITLE", "TRIGGER", "IMPACT", "FIX"].map(
@@ -150,6 +162,7 @@ function parseFinding(
     throw new ReviewDslError(
       "FINDING requires at least one evidence ID.",
       record.line,
+      record.text,
     );
   return {
     id: field(record, 0),
@@ -174,6 +187,7 @@ function parseReasonedRecord(
     throw new ReviewDslError(
       `${record.marker} requires a following EVIDENCE line.`,
       record.line,
+      record.text,
     );
   }
   return {
@@ -199,6 +213,7 @@ function parseEvidence(record: ReviewDslRecord): string[] {
     throw new ReviewDslError(
       "EVIDENCE IDs must not repeat within a record.",
       record.line,
+      record.text,
     );
   }
   return record.fields;
@@ -210,19 +225,21 @@ function expectRecord(
   marker: string,
 ): ReviewDslRecord {
   const record = records[index];
-  if (record?.marker !== marker)
-    throw new ReviewDslError(
-      `Expected ${marker}${record ? ` before ${record.marker}` : " before END"}.`,
-      record?.line,
-    );
-  return record;
+  if (record?.marker === marker) return record;
+  const position = record ?? records[index - 1];
+  throw new ReviewDslError(
+    `Expected ${marker}${record ? ` before ${record.marker}` : " before END"}.`,
+    position?.line,
+    position?.text,
+  );
 }
 
 function requireFields(record: ReviewDslRecord, count: number): void {
   if (record.fields.length !== count)
     throw new ReviewDslError(
-      `${record.marker} requires ${count} header field(s), received ${record.fields.length}.`,
+      `${record.marker} requires ${count} header field(s), received ${record.fields.length}.${headerShape(record.marker)}`,
       record.line,
+      record.text,
     );
 }
 
@@ -232,6 +249,7 @@ function field(record: ReviewDslRecord, index: number): string {
     throw new ReviewDslError(
       `${record.marker} has a missing header field.`,
       record.line,
+      record.text,
     );
   return value;
 }
@@ -243,11 +261,16 @@ function pathField(record: ReviewDslRecord, index: number): string {
     throw new ReviewDslError(
       "A backticked path needs matching backticks and a nonempty path.",
       record.line,
+      record.text,
     );
   }
   const path = value.slice(1, -1);
   if (!path.trim())
-    throw new ReviewDslError("A path must not be blank.", record.line);
+    throw new ReviewDslError(
+      "A path must not be blank.",
+      record.line,
+      record.text,
+    );
   return path;
 }
 
@@ -257,6 +280,7 @@ function requiredBody(record: ReviewDslRecord): string {
     throw new ReviewDslError(
       `${record.marker} requires meaningful prose.`,
       record.line,
+      record.text,
     );
   return text;
 }
@@ -266,6 +290,7 @@ function requireNoBody(record: ReviewDslRecord): void {
     throw new ReviewDslError(
       `${record.marker} does not accept a prose body.`,
       record.line,
+      record.text,
     );
 }
 
@@ -275,6 +300,28 @@ function requireUnique(
   record: ReviewDslRecord,
 ): void {
   if (seen.has(identity))
-    throw new ReviewDslError(`Duplicate ${record.marker} record.`, record.line);
+    throw new ReviewDslError(
+      `Duplicate ${record.marker} record.`,
+      record.line,
+      record.text,
+    );
   seen.add(identity);
+}
+
+const headerShapes: Readonly<Record<string, string>> = {
+  RISK: "RISK | low/medium/high",
+  ARCHITECTURE: "ARCHITECTURE | A/B/C/D/F or none",
+  TESTS: "TESTS | A/B/C/D/F or none",
+  FINDING:
+    "FINDING | id | critical/major/minor | path | positive integer line | LEFT/RIGHT | blocking/follow-up",
+  COVERAGE: "COVERAGE | path | inspected/partial/unreviewed",
+  PRIOR: "PRIOR | id | still-open/resolved/rejected/unverified",
+  CANDIDATE: "CANDIDATE | id | confirmed/rejected/unverified",
+};
+
+/** Re-prints the one grammar line a field-count error concerns. */
+function headerShape(marker: string): string {
+  const shape = headerShapes[marker];
+  if (shape !== undefined) return ` Expected: ${shape}`;
+  return ` Expected: ${marker} alone on its line.`;
 }

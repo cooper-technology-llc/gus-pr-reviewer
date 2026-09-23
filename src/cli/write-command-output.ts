@@ -29,13 +29,23 @@ export async function writeCommandOutput(
   await writeFile(absolutePath, output, "utf8");
 }
 
+/**
+ * With publishing, the exit code reports only whether a review reached the PR:
+ * 0 when one is there (any verdict), 2 when nothing was published.
+ * Without publishing (dry-run): ready 0, changes-requested 1, incomplete 2.
+ */
 export function reviewExitCode(completed: CompletedReview): number {
-  if (
-    publicationExitCode(completed.publication) === 2 ||
-    completed.review.verdict === "incomplete"
-  )
-    return 2;
-  return completed.review.verdict === "changes-requested" ? 1 : 0;
+  const status = completed.publication.status;
+  if (status !== "dry-run")
+    return status === "published" || status === "already-published" ? 0 : 2;
+  switch (completed.review.verdict) {
+    case "ready":
+      return 0;
+    case "changes-requested":
+      return 1;
+    case "incomplete":
+      return 2;
+  }
 }
 
 export function publicationExitCode(publication: PublicationResult): number {
@@ -67,6 +77,7 @@ export function formatPublicationOutput(
     );
   if (publication.issues.length === 0) lines.push("No issues were created.");
   for (const error of publication.errors) lines.push(`- ${error}`);
+  for (const notice of publication.notices) lines.push(`- Notice: ${notice}`);
   return lines.join("\n");
 }
 
